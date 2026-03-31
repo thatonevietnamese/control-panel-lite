@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.0.1
+// @version      15.0.1.1
 // @updateURL    https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
