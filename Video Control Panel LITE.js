@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.0.9
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
