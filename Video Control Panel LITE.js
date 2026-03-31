@@ -9,7 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt(check test)
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt
 // ==/UserScript==
 
 (function () {
@@ -282,6 +282,46 @@ document.addEventListener("keydown", e => {
         }
     }
 });
+
+// ===== AUTO UPDATE CHECK =====
+function checkForUpdates() {
+    const currentVersion = GM_info.script.version;
+    
+    GM_xmlhttpRequest({
+        method: "GET",
+        url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js",
+        onload: function(response) {
+            const match = response.responseText.match(/@version\s+([\d.]+)/);
+            if (match && match[1] !== currentVersion) {
+                showUpdateNotification(match[1]);
+            }
+        }
+    });
+}
+
+function showUpdateNotification(newVersion) {
+    const notification = document.createElement("div");
+    notification.innerHTML = `
+        <div style="position:fixed; top:20px; right:20px; background:#4CAF50; color:white; 
+                    padding:15px; border-radius:8px; z-index:10000; box-shadow:0 4px 15px rgba(0,0,0,0.3);">
+            <strong>🔔 Có bản cập nhật v${newVersion}!</strong><br>
+            <button onclick="location.reload()" 
+                    style="margin-top:8px; padding:5px 15px; background:white; color:#4CAF50; 
+                           border:none; border-radius:4px; cursor:pointer;">
+                Tải lại trang để cập nhật
+            </button>
+            <button onclick="this.parentElement.parentElement.remove()" 
+                    style="margin-top:8px; padding:5px 15px; background:transparent; color:white; 
+                           border:1px solid white; border-radius:4px; cursor:pointer; margin-left:5px;">
+                Để sau
+            </button>
+        </div>
+    `;
+    document.body.appendChild(notification);
+}
+
+// Kiểm tra cập nhật sau 3 giây khởi động
+setTimeout(checkForUpdates, 3000);
 
 // ===== START =====
 initDetection();
