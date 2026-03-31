@@ -8,6 +8,7 @@
 // @grant        GM_getValue
 // @description  Panel điều khiển âm thanh video - nhẹ và mượt
 // ==/UserScript==
+fuck bro updater thí siht
 
 (function () {
 'use strict';
