@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.0.9
+// @version      1.0
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @description  Panel điều khiển âm thanh video - nhẹ và mượt
 // ==/UserScript==
-fuck bro updater thí siht
 
 (function () {
 'use strict';
