@@ -2,8 +2,8 @@
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
 // @version      15.1
-// @updateURL    https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
-// @downloadURL  https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
