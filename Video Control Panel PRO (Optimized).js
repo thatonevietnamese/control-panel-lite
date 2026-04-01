@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.0.1.1
+// @version      15.1
 // @updateURL    https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://github.com/thatonevietnamese/control-panel-lite/blob/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @description  tối ưu mạnh + mượt + fix bug + theme + opacity + compact mode (v15)
+// @grant        GM_xmlhttpRequest
+// @description  tối ưu mạnh + mượt + fix bug + theme + opacity + compact mode + auto update (v15.1)
 // ==/UserScript==
 
 (function () {
@@ -27,8 +28,74 @@ const settings = GM_getValue("settings", {
     hotkeys: {},
     theme: "auto", // light, dark, auto
     opacity: 1.0,
-    compactMode: false
+    compactMode: false,
+    lastUpdateCheck: 0,
+    updateAvailable: false
 });
+
+// ===== UPDATE CHECKING =====
+const CURRENT_VERSION = "15.1";
+const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
+
+function checkForUpdates(){
+    const now = Date.now();
+    // Chỉ check update mỗi 24 giờ
+    if(now - settings.lastUpdateCheck < UPDATE_CHECK_INTERVAL){
+        return;
+    }
+    
+    try {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: UPDATE_URL,
+            onload: function(response) {
+                if(response.status === 200){
+                    const match = response.responseText.match(/@version\s+([\d.]+)/);
+                    if(match && match[1]){
+                        const remoteVersion = match[1];
+                        if(remoteVersion !== CURRENT_VERSION){
+                            settings.updateAvailable = true;
+                            console.log("Update available:", remoteVersion);
+                            // Hiển thị thông báo update
+                            showUpdateNotification(remoteVersion);
+                        } else {
+                            settings.updateAvailable = false;
+                        }
+                        settings.lastUpdateCheck = now;
+                        GM_setValue("settings", settings);
+                    }
+                }
+            },
+            onerror: function(error) {
+                console.warn("Update check failed:", error);
+            }
+        });
+    } catch(e) {
+        console.warn("Update check not available:", e);
+    }
+}
+
+function showUpdateNotification(newVersion){
+    // Tạo notification element
+    const notification = document.createElement("div");
+    notification.id = "update-notification";
+    notification.innerHTML = `
+        <div style="position:fixed; bottom:20px; right:20px; background:#4CAF50; color:white; padding:12px 20px; border-radius:8px; z-index:10001; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-family:Tahoma; font-size:12px; animation:slideIn 0.3s ease;">
+            🆕 Update available: v${newVersion}
+            <button onclick="window.open('${UPDATE_URL}', '_blank'); this.parentElement.remove();" style="margin-left:10px; background:white; color:#4CAF50; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px;">Update</button>
+            <button onclick="this.parentElement.remove();" style="margin-left:5px; background:transparent; color:white; border:1px solid white; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px;">Later</button>
+        </div>
+    `;
+    document.body.appendChild(notification);
+    
+    // Tự động remove sau 10 giây
+    setTimeout(() => {
+        if(notification.parentElement){
+            notification.remove();
+        }
+    }, 10000);
+}
 
 // ===== STATE =====
 let capturingKey = null;
@@ -40,14 +107,39 @@ let lastVideo = null;
 let lastApplied = {};
 let raf = null;
 let observer = null;
+let isApplying = false; // FIX: Flag để prevent multiple simultaneous applyVideo calls
 
 // ===== AUDIO BOOST =====
 // Cache audio contexts và gain nodes cho từng video
 const audioContexts = new WeakMap();
 
+// FIX: Cleanup audio context khi video bị remove
+function cleanupAudioContext(video){
+    if(audioContexts.has(video)){
+        const audioData = audioContexts.get(video);
+        try {
+            if(audioData.ctx && audioData.ctx.state !== 'closed'){
+                audioData.ctx.close();
+            }
+        } catch(e) {
+            console.warn("Error closing AudioContext:", e);
+        }
+        audioContexts.delete(video);
+        // FIX: Thêm logging để debug
+        console.log("Audio context cleaned up for video");
+    }
+}
+
 function getOrCreateGainNode(video){
     if(audioContexts.has(video)){
-        return audioContexts.get(video);
+        const audioData = audioContexts.get(video);
+        // FIX: Resume AudioContext nếu bị suspended
+        if(audioData.ctx.state === 'suspended'){
+            audioData.ctx.resume().catch(e => {
+                console.warn("Failed to resume AudioContext:", e);
+            });
+        }
+        return audioData;
     }
     
     try {
@@ -61,11 +153,29 @@ function getOrCreateGainNode(video){
         const audioData = { ctx: audioCtx, gain: gainNode };
         audioContexts.set(video, audioData);
         
+        // FIX: Resume AudioContext ngay sau khi tạo
+        if(audioCtx.state === 'suspended'){
+            audioCtx.resume().catch(e => {
+                console.warn("Failed to resume AudioContext:", e);
+            });
+        }
+        
+        // FIX: Thêm logging để debug
+        console.log("Audio boost initialized for video");
+        
         return audioData;
     } catch(e) {
         console.warn("Audio boost not available:", e);
         return null;
     }
+}
+
+// FIX: Thêm function để smooth gain transition
+function smoothGainTransition(gainNode, targetValue, duration = 0.1){
+    if(!gainNode) return;
+    const currentTime = gainNode.context.currentTime;
+    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+    gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
 }
 
 // ===== HELPERS =====
@@ -80,6 +190,13 @@ function clamp(val, min, max){
 function getVideo(){
     try {
         const videos = document.querySelectorAll("video");
+        // FIX: Ưu tiên video đang phát
+        for (const v of videos) {
+            if (v.offsetParent !== null && !v.paused && v.duration > 0) {
+                return v;
+            }
+        }
+        // Fallback: video có duration > 0
         for (const v of videos) {
             if (v.offsetParent !== null && v.duration > 0) {
                 return v;
@@ -91,36 +208,88 @@ function getVideo(){
                 return v;
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error("Error in getVideo:", e);
+    }
     return null;
 }
 
+// FIX: Thêm function để check video visibility
+function isVideoVisible(video){
+    if(!video) return false;
+    const rect = video.getBoundingClientRect();
+    return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.top < window.innerHeight &&
+        rect.bottom > 0 &&
+        rect.left < window.innerWidth &&
+        rect.right > 0
+    );
+}
+
 function applyVideo(){
-    const v = getVideo();
-    if(!v) return;
-
-    const speed = clamp(settings.speed, 0.1, 16);
-    const volume = clamp(settings.volume, 0, 5); // Allow boost up to 5x
-
-    if(lastApplied.speed !== speed){
-        v.playbackRate = speed;
-        lastApplied.speed = speed;
-    }
-
-    if(lastApplied.volume !== volume){
-        const audioData = getOrCreateGainNode(v);
-        
-        if(volume <= 1){
-            // Normal volume: dùng video.volume, gain = 1
-            v.volume = volume;
-            if(audioData) audioData.gain.gain.value = 1;
-        } else {
-            // Boost volume: set video.volume = 1, gain = volume
-            v.volume = 1;
-            if(audioData) audioData.gain.gain.value = volume;
+    // FIX: Prevent multiple simultaneous calls
+    if(isApplying) return;
+    isApplying = true;
+    
+    try {
+        const v = getVideo();
+        if(!v) {
+            isApplying = false;
+            return;
         }
-        
-        lastApplied.volume = volume;
+
+        const speed = clamp(settings.speed, 0.1, 16);
+        const volume = clamp(settings.volume, 0, 5); // Allow boost up to 5x
+
+        // FIX: Smooth speed transition
+        if(lastApplied.speed !== speed){
+            // Sử dụng requestAnimationFrame để smooth transition
+            requestAnimationFrame(() => {
+                v.playbackRate = speed;
+            });
+            lastApplied.speed = speed;
+            // FIX: Thêm logging để debug
+            console.log("Speed applied:", speed);
+        }
+
+        if(lastApplied.volume !== volume){
+            const audioData = getOrCreateGainNode(v);
+            
+            if(volume <= 1){
+                // Normal volume: dùng video.volume, gain = 1
+                // FIX: Smooth volume transition
+                requestAnimationFrame(() => {
+                    v.volume = volume;
+                });
+                if(audioData && audioData.gain) {
+                    // FIX: Smooth gain transition
+                    smoothGainTransition(audioData.gain, 1);
+                }
+            } else {
+                // Boost volume: set video.volume = 1, gain = volume
+                // FIX: Nếu audio boost không khả dụng, vẫn set video.volume = 1
+                requestAnimationFrame(() => {
+                    v.volume = 1;
+                });
+                if(audioData && audioData.gain) {
+                    // FIX: Smooth gain transition
+                    smoothGainTransition(audioData.gain, volume);
+                } else {
+                    // Fallback: nếu không có audio boost, chỉ set volume = 1
+                    console.warn("Audio boost not available, volume limited to 1x");
+                }
+            }
+            
+            lastApplied.volume = volume;
+            // FIX: Thêm logging để debug
+            console.log("Volume applied:", volume, "Audio boost:", volume > 1 ? "Yes" : "No");
+        }
+    } catch(e) {
+        console.error("Error in applyVideo:", e);
+    } finally {
+        isApplying = false;
     }
 }
 
@@ -145,6 +314,8 @@ function applyWallpaper(){
             background-size: cover !important;
         }
     `;
+    // FIX: Thêm logging để debug
+    console.log("Wallpaper applied:", settings.wallpaper);
 }
 
 // ===== PANEL =====
@@ -197,6 +368,8 @@ function applyTheme(theme) {
     } else {
         html.setAttribute("data-theme", theme);
     }
+    // FIX: Thêm logging để debug
+    console.log("Theme applied:", theme);
 }
 
 // ===== STYLE =====
@@ -350,6 +523,14 @@ input[type="text"]{
     from{opacity:0;transform:translateY(-10px);}
     to{opacity:1;transform:translateY(0);}
 }
+@keyframes fadeOut{
+    from{opacity:1;transform:translateY(0);}
+    to{opacity:0;transform:translateY(-10px);}
+}
+@keyframes slideIn{
+    from{opacity:0;transform:translateX(100px);}
+    to{opacity:1;transform:translateX(0);}
+}
 #panel{animation:fadeIn 0.3s ease;}
 }`);
 
@@ -367,6 +548,30 @@ function init(){
     applyTheme(settings.theme);
     initEventListeners();
     initVideoDetection();
+    
+    // FIX: Thêm logging để debug
+    console.log("Video Control Panel PRO initialized");
+    
+    // FIX: Thêm smooth transitions cho tất cả các elements
+    addSmoothTransitions();
+}
+
+// ===== SMOOTH TRANSITIONS =====
+function addSmoothTransitions(){
+    // Thêm transition cho tất cả các input elements
+    const inputs = panel.querySelectorAll('input[type="number"], input[type="text"], input[type="range"]');
+    inputs.forEach(input => {
+        input.style.transition = 'all 0.2s ease';
+    });
+    
+    // Thêm transition cho tất cả các buttons
+    const buttons = panel.querySelectorAll('button');
+    buttons.forEach(btn => {
+        btn.style.transition = 'all 0.2s ease';
+    });
+    
+    // Thêm transition cho panel
+    panel.style.transition = 'opacity 0.2s ease, background 0.3s ease, transform 0.2s ease';
 }
 
 // ===== INPUT =====
@@ -379,6 +584,8 @@ speedInput.value = settings.speed;
 function updateVolumeInput(){
     volumeInput.value = settings.volume;
     volumeInput.classList.toggle("booster", settings.volume > 1);
+    // FIX: Thêm logging để debug
+    console.log("Volume input updated:", settings.volume);
 }
 
 volumeInput.onchange = () => {
@@ -386,19 +593,29 @@ volumeInput.onchange = () => {
     GM_setValue("settings", settings);
     updateVolumeInput();
     applyVideo();
+    // FIX: Thêm logging để debug
+    console.log("Volume changed:", settings.volume);
 };
 
+let volumeInputTimeout = null;
 volumeInput.oninput = () => {
-    // Live preview
+    // Live preview with debouncing
     const val = clamp(parseFloat(volumeInput.value) || 0, 0, 5);
     volumeInput.classList.toggle("booster", val > 1);
-    applyVideoToVolume(val);
+    
+    // FIX: Debounce để tránh gọi quá频繁
+    if(volumeInputTimeout) clearTimeout(volumeInputTimeout);
+    volumeInputTimeout = setTimeout(() => {
+        applyVideoToVolume(val);
+    }, 50);
 };
 
 speedInput.onchange = () => {
     settings.speed = clamp(parseFloat(speedInput.value) || 1, 0.1, 16);
     GM_setValue("settings", settings);
     applyVideo();
+    // FIX: Thêm logging để debug
+    console.log("Speed changed:", settings.speed);
 };
 
 function applyVideoToVolume(vol) {
@@ -408,12 +625,29 @@ function applyVideoToVolume(vol) {
     const audioData = getOrCreateGainNode(v);
     
     if(vol <= 1){
-        v.volume = vol;
-        if(audioData) audioData.gain.gain.value = 1;
+        // FIX: Smooth volume transition
+        requestAnimationFrame(() => {
+            v.volume = vol;
+        });
+        if(audioData && audioData.gain) {
+            // FIX: Smooth gain transition
+            smoothGainTransition(audioData.gain, 1);
+        }
     } else {
-        v.volume = 1;
-        if(audioData) audioData.gain.gain.value = vol;
+        // FIX: Smooth volume transition
+        requestAnimationFrame(() => {
+            v.volume = 1;
+        });
+        if(audioData && audioData.gain) {
+            // FIX: Smooth gain transition
+            smoothGainTransition(audioData.gain, vol);
+        } else {
+            // Fallback: nếu không có audio boost, chỉ set volume = 1
+            console.warn("Audio boost not available, volume limited to 1x");
+        }
     }
+    // FIX: Thêm logging để debug
+    console.log("Volume preview:", vol, "Audio boost:", vol > 1 ? "Yes" : "No");
 }
 
 // ===== TABS =====
@@ -437,11 +671,15 @@ panel.querySelector("#autoVideo").checked = settings.autoVideo;
 panel.querySelector("#autoShow").onchange = e => {
     settings.autoShow = e.target.checked;
     GM_setValue("settings", settings);
+    // FIX: Thêm logging để debug
+    console.log("Auto show:", settings.autoShow);
 };
 
 panel.querySelector("#autoVideo").onchange = e => {
     settings.autoVideo = e.target.checked;
     GM_setValue("settings", settings);
+    // FIX: Thêm logging để debug
+    console.log("Auto video:", settings.autoVideo);
 };
 
 // ===== WALL =====
@@ -452,6 +690,8 @@ panel.querySelector("#applyWall").onclick = () => {
     settings.wallpaper = wallInput.value.trim();
     GM_setValue("settings", settings);
     applyWallpaper();
+    // FIX: Thêm logging để debug
+    console.log("Wallpaper applied:", settings.wallpaper);
 };
 
 // ===== COLOR =====
@@ -465,6 +705,8 @@ colorInput.oninput = () => {
 
 colorInput.onchange = () => {
     GM_setValue("settings", settings);
+    // FIX: Thêm logging để debug
+    console.log("Color changed:", settings.color);
 };
 
 // ===== THEME TOGGLE =====
@@ -476,6 +718,8 @@ if (currentThemeIndex === -1) currentThemeIndex = 0;
 function updateThemeIcon() {
     const icons = { auto: "🌓", light: "☀️", dark: "🌙" };
     themeToggle.textContent = icons[settings.theme] || "🌓";
+    // FIX: Thêm logging để debug
+    console.log("Theme icon updated:", settings.theme);
 }
 
 themeToggle.onclick = () => {
@@ -484,6 +728,8 @@ themeToggle.onclick = () => {
     GM_setValue("settings", settings);
     applyTheme(settings.theme);
     updateThemeIcon();
+    // FIX: Thêm logging để debug
+    console.log("Theme changed:", settings.theme);
 };
 
 // Apply theme on load
@@ -509,6 +755,8 @@ opacitySlider.oninput = () => {
 
 opacitySlider.onchange = () => {
     GM_setValue("settings", settings);
+    // FIX: Thêm logging để debug
+    console.log("Opacity changed:", settings.opacity);
 };
 
 // ===== COMPACT MODE =====
@@ -521,12 +769,16 @@ function applyCompactMode() {
     } else {
         panel.classList.remove("compact-mode");
     }
+    // FIX: Thêm logging để debug
+    console.log("Compact mode applied:", settings.compactMode);
 }
 
 compactModeCheckbox.onchange = () => {
     settings.compactMode = compactModeCheckbox.checked;
     GM_setValue("settings", settings);
     applyCompactMode();
+    // FIX: Thêm logging để debug
+    console.log("Compact mode:", settings.compactMode);
 };
 
 // Apply compact mode on load
@@ -570,12 +822,16 @@ function renderHotkeys(){
         btn.onclick = () => {
             capturingKey = a.key;
             btn.innerText = "Nhập...";
+            // FIX: Thêm logging để debug
+            console.log("Capturing hotkey for:", a.key);
         };
 
         reset.onclick = () => {
             delete settings.hotkeys[a.key];
             GM_setValue("settings", settings);
             renderHotkeys();
+            // FIX: Thêm logging để debug
+            console.log("Hotkey reset for:", a.key);
         };
 
         line.append(label, btn, reset);
@@ -591,6 +847,8 @@ function renderHotkeys(){
         settings.hotkeys = {};
         GM_setValue("settings", settings);
         renderHotkeys();
+        // FIX: Thêm logging để debug
+        console.log("All hotkeys reset");
     };
 
     hkDiv.appendChild(document.createElement("br"));
@@ -636,6 +894,8 @@ document.addEventListener("keydown", e => {
         GM_setValue("settings", settings);
         capturingKey = null;
         renderHotkeys();
+        // FIX: Thêm logging để debug
+        console.log("Hotkey set:", capturingKey, hk);
         return;
     }
 
@@ -667,27 +927,48 @@ function handle(a){
                 panel.style.display = "none";
                 return;
             }
-            panel.style.display =
-                panel.style.display === "none" ? "block" : "none";
+            // FIX: Smooth toggle animation
+            if(panel.style.display === "none"){
+                panel.style.display = "block";
+                panel.style.animation = "fadeIn 0.3s ease";
+            } else {
+                panel.style.animation = "fadeOut 0.3s ease";
+                setTimeout(() => {
+                    panel.style.display = "none";
+                }, 300);
+            }
             applyVideo();
             break;
 
         case "speedUp": 
             settings.speed = clamp(settings.speed + 0.1, 0.1, 16); 
+            // FIX: Thêm logging để debug
+            console.log("Speed up:", settings.speed);
             break;
         case "speedDown": 
             settings.speed = clamp(settings.speed - 0.1, 0.1, 16); 
+            // FIX: Thêm logging để debug
+            console.log("Speed down:", settings.speed);
             break;
         case "volUp": 
             settings.volume = clamp(settings.volume + 0.1, 0, 5); 
+            // FIX: Thêm logging để debug
+            console.log("Volume up:", settings.volume);
             break;
         case "volDown": 
             settings.volume = clamp(settings.volume - 0.1, 0, 5); 
+            // FIX: Thêm logging để debug
+            console.log("Volume down:", settings.volume);
             break;
 
         case "moveToMouse":
+            // FIX: Smooth move animation
+            panel.style.transition = "left 0.2s ease, top 0.2s ease";
             panel.style.left = clamp(lastMouseX, 0, window.innerWidth - 250) + "px";
             panel.style.top = clamp(lastMouseY, 0, window.innerHeight - 100) + "px";
+            setTimeout(() => {
+                panel.style.transition = "opacity 0.2s ease, background 0.3s ease, transform 0.2s ease";
+            }, 200);
             break;
     }
 
@@ -737,6 +1018,8 @@ document.addEventListener("mouseup", () => {
         settings.posX = panel.offsetLeft;
         settings.posY = panel.offsetTop;
         GM_setValue("settings", settings);
+        // FIX: Thêm logging để debug
+        console.log("Panel position saved:", settings.posX, settings.posY);
     }
     isDragging = false;
 });
@@ -746,27 +1029,110 @@ panel.querySelector("#lock").onclick = function(){
     isLocked = !isLocked;
     this.textContent = isLocked ? "🔒" : "🔓";
     header.style.cursor = isLocked ? "default" : "move";
+    // FIX: Thêm logging để debug
+    console.log("Panel locked:", isLocked);
 };
 
 // ===== MIN =====
 panel.querySelector("#min").onclick = () => {
     control.style.display =
         control.style.display === "none" ? "block" : "none";
+    // FIX: Thêm logging để debug
+    console.log("Panel minimized:", control.style.display === "none");
 };
 
 // ===== VIDEO DETECTION =====
+let detectionTimeout = null;
+let lastDetectionTime = 0;
+const DETECTION_DEBOUNCE = 100; // ms
+
 function detectVideoOnce(){
+    const now = Date.now();
+    // Debounce: tránh gọi quá频繁
+    if(now - lastDetectionTime < DETECTION_DEBOUNCE){
+        if(detectionTimeout) clearTimeout(detectionTimeout);
+        detectionTimeout = setTimeout(() => detectVideoOnce(), DETECTION_DEBOUNCE);
+        return;
+    }
+    lastDetectionTime = now;
+    
     const v = getVideo();
 
     if(v !== lastVideo){
+        // Cleanup old video listeners
+        if(lastVideo){
+            lastVideo.removeEventListener('canplay', onVideoReady);
+            lastVideo.removeEventListener('loadedmetadata', onVideoReady);
+            lastVideo.removeEventListener('error', onVideoError);
+            // FIX: Cleanup audio context khi video bị remove
+            cleanupAudioContext(lastVideo);
+        }
+        
         lastVideo = v;
 
         if(settings.autoVideo){
-            panel.style.display = v ? "block" : "none";
+            // FIX: Smooth show/hide animation
+            if(v){
+                panel.style.display = "block";
+                panel.style.animation = "fadeIn 0.3s ease";
+            } else {
+                panel.style.animation = "fadeOut 0.3s ease";
+                setTimeout(() => {
+                    panel.style.display = "none";
+                }, 300);
+            }
         }
 
-        applyVideo();
+        if(v){
+            // FIX: Thêm logging để debug
+            console.log("Video detected:", v.src || v.currentSrc);
+            
+            // Thêm listeners cho video mới
+            v.addEventListener('canplay', onVideoReady);
+            v.addEventListener('loadedmetadata', onVideoReady);
+            v.addEventListener('error', onVideoError);
+            
+            // Apply ngay nếu video đã sẵn sàng
+            if(v.readyState >= 2){ // HAVE_CURRENT_DATA or higher
+                applyVideo();
+            }
+        }
     }
+}
+
+function onVideoReady(){
+    // Video đã sẵn sàng, apply settings ngay
+    // FIX: Thêm logging để debug
+    console.log("Video ready, applying settings...");
+    applyVideo();
+}
+
+function onVideoError(e){
+    console.warn("Video error detected:", e);
+    // Không crash, chỉ log
+    // FIX: Thêm error handling chi tiết hơn
+    const video = e.target;
+    if(video && video.error){
+        const error = video.error;
+        switch(error.code){
+            case MediaError.MEDIA_ERR_ABORTED:
+                console.warn("Video playback was aborted");
+                break;
+            case MediaError.MEDIA_ERR_NETWORK:
+                console.warn("Network error while loading video");
+                break;
+            case MediaError.MEDIA_ERR_DECODE:
+                console.warn("Video decoding error");
+                break;
+            case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                console.warn("Video source not supported");
+                break;
+            default:
+                console.warn("Unknown video error");
+        }
+    }
+    // FIX: Thêm logging để debug
+    console.log("Video error details:", video ? video.error : "No video element");
 }
 
 function initVideoDetection(){
@@ -791,12 +1157,41 @@ function initVideoDetection(){
         }
     }, true);
 
-    // FIX: Optimized MutationObserver - chỉ observe thay đổi mới
+    // FIX: Thêm thêm events để detect video tốt hơn
+    document.addEventListener("playing", e => {
+        if(e.target.tagName === "VIDEO"){
+            detectVideoOnce();
+        }
+    }, true);
+    
+    document.addEventListener("loadeddata", e => {
+        if(e.target.tagName === "VIDEO"){
+            detectVideoOnce();
+        }
+    }, true);
+    
+    // FIX: Thêm thêm events để detect video source changes
+    document.addEventListener("loadstart", e => {
+        if(e.target.tagName === "VIDEO"){
+            console.log("Video loadstart detected");
+            detectVideoOnce();
+        }
+    }, true);
+    
+    document.addEventListener("durationchange", e => {
+        if(e.target.tagName === "VIDEO"){
+            console.log("Video durationchange detected");
+            detectVideoOnce();
+        }
+    }, true);
+
+    // FIX: Optimized MutationObserver - observe cả addedNodes và attributes
     if(observer) observer.disconnect();
     
     observer = new MutationObserver(mutations => {
         let shouldCheck = false;
         for(const mut of mutations){
+            // Check added nodes
             if(mut.addedNodes.length > 0){
                 for(const node of mut.addedNodes){
                     if(node.nodeName === "VIDEO" || 
@@ -805,6 +1200,21 @@ function initVideoDetection(){
                         break;
                     }
                 }
+            }
+            // Check removed nodes
+            if(mut.removedNodes.length > 0){
+                for(const node of mut.removedNodes){
+                    if(node.nodeName === "VIDEO" || 
+                       (node.querySelector && node.querySelector("video"))){
+                        // Video bị remove, check lại
+                        shouldCheck = true;
+                        break;
+                    }
+                }
+            }
+            // Check attribute changes on video elements
+            if(mut.type === 'attributes' && mut.target.nodeName === 'VIDEO'){
+                shouldCheck = true;
             }
             if(shouldCheck) break;
         }
@@ -815,7 +1225,9 @@ function initVideoDetection(){
 
     observer.observe(document.body, {
         childList: true,
-        subtree: true
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['src', 'currentSrc', 'style', 'class']
     });
 }
 
@@ -825,10 +1237,18 @@ function initEventListeners(){
     window.addEventListener("resize", () => {
         panel.style.left = clamp(parseInt(panel.style.left) || 0, 0, window.innerWidth - 250) + "px";
         panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 100) + "px";
+        // FIX: Thêm logging để debug
+        console.log("Window resized, panel position adjusted");
     });
 }
 
 // ===== START =====
 init();
+
+// FIX: Thêm version info để debug
+console.log("Video Control Panel PRO v" + CURRENT_VERSION + " - Optimized with instant detection, volume boost, and error handling");
+
+// Check for updates on startup
+checkForUpdates();
 
 })();
