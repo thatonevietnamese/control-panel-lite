@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.2
-// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
-// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
+// @version      15.2.1
+// @updateURL    https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
+// @downloadURL  https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  tối ưu mạnh + mượt + fix bug + theme + opacity + compact mode + auto update (v15.1)
+// @description  new converter liink
 // ==/UserScript==
 
 (function () {
@@ -36,7 +36,7 @@ const settings = GM_getValue("settings", {
 // ===== UPDATE CHECKING =====
 const CURRENT_VERSION = "15.1";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
-const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
+const UPDATE_URL = "https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
     const now = Date.now();
