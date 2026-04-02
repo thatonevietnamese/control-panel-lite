@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.2.1
+// @version      15.3.5
 // @updateURL    https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -9,7 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  new converter liink
+// @description  tối ưu mạnh + mượt + fix bug + theme + opacity + compact mode + auto update (v15.1)
 // ==/UserScript==
 
 (function () {
@@ -30,18 +30,21 @@ const settings = GM_getValue("settings", {
     opacity: 1.0,
     compactMode: false,
     lastUpdateCheck: 0,
-    updateAvailable: false
+    updateAvailable: false,
+    updateCheckInterval: 24, // hours: 1, 6, 12, 24, 48
+    autoShowNotification: true,
+    notificationDuration: 10 // seconds, 0 = never auto-dismiss
 });
 
 // ===== UPDATE CHECKING =====
 const CURRENT_VERSION = "15.1";
-const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_URL = "https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
     const now = Date.now();
-    // Chỉ check update mỗi 24 giờ
-    if(now - settings.lastUpdateCheck < UPDATE_CHECK_INTERVAL){
+    // Chỉ check update theo interval đã設定
+    const intervalMs = (settings.updateCheckInterval || 24) * 60 * 60 * 1000;
+    if(now - settings.lastUpdateCheck < intervalMs){
         return;
     }
     
@@ -77,6 +80,12 @@ function checkForUpdates(){
 }
 
 function showUpdateNotification(newVersion){
+    // Kiểm tra xem có nên hiện notification không
+    if(!settings.autoShowNotification){
+        console.log("Update available:", newVersion, "(notification disabled)");
+        return;
+    }
+    
     // Tạo notification element
     const notification = document.createElement("div");
     notification.id = "update-notification";
@@ -89,12 +98,15 @@ function showUpdateNotification(newVersion){
     `;
     document.body.appendChild(notification);
     
-    // Tự động remove sau 10 giây
-    setTimeout(() => {
-        if(notification.parentElement){
-            notification.remove();
-        }
-    }, 10000);
+    // Tự động remove theo settings (0 = never)
+    const duration = settings.notificationDuration || 10;
+    if(duration > 0){
+        setTimeout(() => {
+            if(notification.parentElement){
+                notification.remove();
+            }
+        }, duration * 1000);
+    }
 }
 
 // ===== STATE =====
@@ -352,6 +364,17 @@ panel.innerHTML = `
     <br><br>
     Màu:
     <input type="color" id="color">
+
+    <br><br>
+    <div class="row">🔄 Check update: <select id="updateInterval">
+        <option value="1">1 giờ</option>
+        <option value="6">6 giờ</option>
+        <option value="12">12 giờ</option>
+        <option value="24">24 giờ</option>
+        <option value="48">48 giờ</option>
+    </select></div>
+    <label><input type="checkbox" id="autoNotify"> Hiện thông báo update</label><br>
+    <div class="row">⏱️ Tự ẩn sau: <input type="number" id="notifyDuration" min="0" max="60" step="1" value="${settings.notificationDuration}" style="width:50px;"> giây (0=không)</div>
 
     <br><br>
     Hotkey:
@@ -783,6 +806,35 @@ compactModeCheckbox.onchange = () => {
 
 // Apply compact mode on load
 applyCompactMode();
+
+// ===== UPDATE SETTINGS =====
+const updateIntervalSelect = panel.querySelector("#updateInterval");
+const autoNotifyCheckbox = panel.querySelector("#autoNotify");
+const notifyDurationInput = panel.querySelector("#notifyDuration");
+
+// Set initial values
+updateIntervalSelect.value = settings.updateCheckInterval || 24;
+autoNotifyCheckbox.checked = settings.autoShowNotification !== false;
+notifyDurationInput.value = settings.notificationDuration || 10;
+
+updateIntervalSelect.onchange = () => {
+    settings.updateCheckInterval = parseInt(updateIntervalSelect.value);
+    GM_setValue("settings", settings);
+    console.log("Update check interval changed:", settings.updateCheckInterval, "hours");
+};
+
+autoNotifyCheckbox.onchange = () => {
+    settings.autoShowNotification = autoNotifyCheckbox.checked;
+    GM_setValue("settings", settings);
+    console.log("Auto show notification:", settings.autoShowNotification);
+};
+
+notifyDurationInput.onchange = () => {
+    settings.notificationDuration = clamp(parseInt(notifyDurationInput.value) || 10, 0, 60);
+    notifyDurationInput.value = settings.notificationDuration;
+    GM_setValue("settings", settings);
+    console.log("Notification duration changed:", settings.notificationDuration, "seconds");
+};
 
 // ===== HOTKEY =====
 const actions = [
