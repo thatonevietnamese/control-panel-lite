@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1.1
+// @version      1.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -47,8 +47,33 @@ function getVideo(){
 }
 
 // ===== AUDIO BOOST =====
+// FIX: Cleanup audio context khi video bị remove
+function cleanupAudioContext(video){
+    if(audioContexts.has(video)){
+        const audioData = audioContexts.get(video);
+        try {
+            if(audioData.ctx && audioData.ctx.state !== 'closed'){
+                audioData.ctx.close();
+            }
+        } catch(e) {
+            console.warn("Error closing AudioContext:", e);
+        }
+        audioContexts.delete(video);
+        console.log("Audio context cleaned up for video");
+    }
+}
+
 function getOrCreateGainNode(video){
-    if(audioContexts.has(video)) return audioContexts.get(video);
+    if(audioContexts.has(video)){
+        const audioData = audioContexts.get(video);
+        // FIX: Resume AudioContext nếu bị suspended
+        if(audioData.ctx.state === 'suspended'){
+            audioData.ctx.resume().catch(e => {
+                console.warn("Failed to resume AudioContext:", e);
+            });
+        }
+        return audioData;
+    }
     
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -60,8 +85,28 @@ function getOrCreateGainNode(video){
         
         const data = { ctx: audioCtx, gain: gainNode };
         audioContexts.set(video, data);
+        
+        // FIX: Resume AudioContext ngay sau khi tạo
+        if(audioCtx.state === 'suspended'){
+            audioCtx.resume().catch(e => {
+                console.warn("Failed to resume AudioContext:", e);
+            });
+        }
+        
+        console.log("Audio boost initialized for video");
         return data;
-    } catch(e) { return null; }
+    } catch(e) {
+        console.warn("Audio boost not available:", e);
+        return null;
+    }
+}
+
+// FIX: Thêm function để smooth gain transition
+function smoothGainTransition(gainNode, targetValue, duration = 0.1){
+    if(!gainNode) return;
+    const currentTime = gainNode.context.currentTime;
+    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+    gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
 }
 
 function applyVolume(){
@@ -73,10 +118,10 @@ function applyVolume(){
     
     if(vol <= 1){
         v.volume = vol;
-        if(audioData) audioData.gain.gain.value = 1;
+        if(audioData) smoothGainTransition(audioData.gain, 1);
     } else {
         v.volume = 1;
-        if(audioData) audioData.gain.gain.value = vol;
+        if(audioData) smoothGainTransition(audioData.gain, vol);
     }
 }
 
@@ -230,10 +275,10 @@ volSlider.addEventListener("input", () => {
         const audioData = getOrCreateGainNode(v);
         if(val <= 1){
             v.volume = val;
-            if(audioData) audioData.gain.gain.value = 1;
+            if(audioData) smoothGainTransition(audioData.gain, 1);
         } else {
             v.volume = 1;
-            if(audioData) audioData.gain.gain.value = val;
+            if(audioData) smoothGainTransition(audioData.gain, val);
         }
     }
 });
@@ -253,10 +298,10 @@ volInput.addEventListener("input", () => {
         const audioData = getOrCreateGainNode(v);
         if(val <= 1){
             v.volume = val;
-            if(audioData) audioData.gain.gain.value = 1;
+            if(audioData) smoothGainTransition(audioData.gain, 1);
         } else {
             v.volume = 1;
-            if(audioData) audioData.gain.gain.value = val;
+            if(audioData) smoothGainTransition(audioData.gain, val);
         }
     }
 });
@@ -287,16 +332,25 @@ document.addEventListener("keydown", e => {
 function checkForUpdates() {
     const currentVersion = GM_info.script.version;
     
-    GM_xmlhttpRequest({
-        method: "GET",
-        url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js",
-        onload: function(response) {
-            const match = response.responseText.match(/@version\s+([\d.]+)/);
-            if (match && match[1] !== currentVersion) {
-                showUpdateNotification(match[1]);
+    try {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/main/Video%20Control%20Panel%20LITE.js",
+            onload: function(response) {
+                if(response.status === 200){
+                    const match = response.responseText.match(/@version\s+([\d.]+)/);
+                    if (match && match[1] !== currentVersion) {
+                        showUpdateNotification(match[1]);
+                    }
+                }
+            },
+            onerror: function(error) {
+                console.warn("Update check failed:", error);
             }
-        }
-    });
+        });
+    } catch(e) {
+        console.warn("Update check not available:", e);
+    }
 }
 
 function showUpdateNotification(newVersion) {
@@ -318,6 +372,13 @@ function showUpdateNotification(newVersion) {
         </div>
     `;
     document.body.appendChild(notification);
+    
+    // FIX: Tự động remove sau 10 giây
+    setTimeout(() => {
+        if(notification.parentElement){
+            notification.remove();
+        }
+    }, 10000);
 }
 
 // Kiểm tra cập nhật sau 3 giây khởi động
