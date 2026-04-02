@@ -2,14 +2,14 @@
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
 // @version      1.3
-// @updateURL    https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20LITE.js
-// @downloadURL  https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20LITE.js
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  new link converter easy update hee
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt(check test nữa)
 // ==/UserScript==
 
 (function () {
@@ -335,7 +335,7 @@ function checkForUpdates() {
     try {
         GM_xmlhttpRequest({
             method: "GET",
-            url: "https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20LITE.js",
+            url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js",
             onload: function(response) {
                 if(response.status === 200){
                     const match = response.responseText.match(/@version\s+([\d.]+)/);
