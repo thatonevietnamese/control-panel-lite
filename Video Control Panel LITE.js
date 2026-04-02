@@ -9,7 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt(check test nữa)
+// @description  new link converter easy update hee
 // ==/UserScript==
 
 (function () {
