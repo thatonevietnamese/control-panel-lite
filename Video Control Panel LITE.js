@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1.1
+// @version      1.3
 // @updateURL    https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/thatonevietnamese/control-panel-lite@refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
