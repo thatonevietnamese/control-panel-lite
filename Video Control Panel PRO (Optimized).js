@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.2.2
+// @version      15.4
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -9,7 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  tối ưu mạnh + mượt + fix bug + theme + opacity + compact mode + auto update (v15.1)
+// @description  Auto skip ads + Video info + Custom UI + theme + opacity + compact mode + auto update (v15.3)
 // ==/UserScript==
 
 (function () {
@@ -23,21 +23,28 @@ const settings = GM_getValue("settings", {
     wallpaper: "",
     autoShow: true,
     autoVideo: false,
+    autoResume: true,
+    autoLoop: true,
+    autoSkipAd: true,
+    showVideoInfo: true,
     posX: 60,
     posY: 60,
     hotkeys: {},
-    theme: "auto", // light, dark, auto
+    theme: "auto",
     opacity: 1.0,
     compactMode: false,
     lastUpdateCheck: 0,
     updateAvailable: false,
-    updateCheckInterval: 24, // hours: 1, 6, 12, 24, 48
+    updateCheckInterval: 24,
     autoShowNotification: true,
-    notificationDuration: 10 // seconds, 0 = never auto-dismiss
+    notificationDuration: 10,
+    customUI: false,
+    removeShorts: false,
+    removeSidebar: false
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "15.1";
+const CURRENT_VERSION = "15.3";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -109,6 +116,33 @@ function showUpdateNotification(newVersion){
     }
 }
 
+// ===== CONFLICT CHECK =====
+function checkConflict() {
+    // PRO uses id="panel", LITE uses id="vcp-panel"
+    const proPanel = document.getElementById("panel");
+    const litePanel = document.getElementById("vcp-panel");
+    
+    if (proPanel && litePanel) {
+        showConflictNotification();
+    }
+}
+
+function showConflictNotification() {
+    // Only show once
+    if (document.getElementById("conflict-notification")) return;
+    
+    const notification = document.createElement("div");
+    notification.id = "conflict-notification";
+    notification.innerHTML = `
+        <div style="position:fixed; top:20px; right:20px; background:#f44336; color:white; padding:12px 20px; border-radius:8px; z-index:10002; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-family:Tahoma; font-size:12px; animation:slideIn 0.3s ease;">
+            ⚠️ Xung đột! Cả PRO và LITE đang bật. Vui lòng tắt một phiên bản.
+            <button onclick="this.parentElement.remove();" style="margin-left:10px; background:white; color:#f44336; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px;">OK</button>
+        </div>
+    `;
+    document.body.appendChild(notification);
+    console.warn("Conflict detected: Both PRO and LITE versions are running!");
+}
+
 // ===== STATE =====
 let capturingKey = null;
 let isDragging = false;
@@ -119,7 +153,11 @@ let lastVideo = null;
 let lastApplied = {};
 let raf = null;
 let observer = null;
-let isApplying = false; // FIX: Flag để prevent multiple simultaneous applyVideo calls
+let isApplying = false;
+let videoInfoInterval = null;
+
+// ===== AUTO RESUME STATE =====
+window.autoResumeEnabled = () => settings.autoResume;
 
 // ===== AUDIO BOOST =====
 // Cache audio contexts và gain nodes cho từng video
@@ -346,17 +384,35 @@ panel.innerHTML = `
 <div id="control">
     <div class="row">🔊 <input type="number" id="volume" step="0.1" min="0" max="5" data-tooltip="Âm lượng (0-5x)"></div>
     <div class="row">⚡ <input type="number" id="speed" step="0.1" min="0.1" max="16" data-tooltip="Tốc độ (0.1-16x)"></div>
+    <div class="row"><button id="pauseToggle" data-tooltip="Dừng auto-resume">⏸ Auto</button></div>
     <div class="row"><label><input type="checkbox" id="compactMode"> Compact</label></div>
 </div>
 
 <div id="settings" style="display:none">
-    <label><input type="checkbox" id="autoShow"> Auto hiện</label><br>
+    <label><input type="checkbox" id="autoShow"> Auto hiện</label>
     <label><input type="checkbox" id="autoVideo"> Chỉ khi có video</label>
 
-    <br><br>
+    <hr>
+    <strong>🎮 Tính năng</strong>
+    <div class="feat-grid">
+        <label><input type="checkbox" id="autoLoop"> 🔁 Loop</label>
+        <label><input type="checkbox" id="autoResume"> ⏯️ Resume</label>
+        <label><input type="checkbox" id="showVideoInfo"> 📺 Info</label>
+        <label><input type="checkbox" id="autoSkipAd"> ⏭️ Skip Ad</label>
+    </div>
+
+    <hr>
+    <strong>🎨 Custom UI</strong>
+    <div class="feat-grid">
+        <label><input type="checkbox" id="customUI"> Bật UI</label>
+        <label><input type="checkbox" id="removeShorts"> Ẩn Shorts</label>
+        <label><input type="checkbox" id="removeSidebar"> Ẩn Sidebar</label>
+    </div>
+
+    <hr>
     <div class="row">🎨 Độ mờ: <input type="range" id="opacitySlider" min="0.3" max="1" step="0.1" value="${settings.opacity}"> <span id="opacityValue">${Math.round(settings.opacity*100)}%</span></div>
 
-    <br><br>
+    <br>
     Wallpaper:
     <input id="wall" type="text" placeholder="URL hình nền">
     <button id="applyWall">OK</button>
@@ -373,8 +429,8 @@ panel.innerHTML = `
         <option value="24">24 giờ</option>
         <option value="48">48 giờ</option>
     </select></div>
-    <label><input type="checkbox" id="autoNotify"> Hiện thông báo update</label><br>
-    <div class="row">⏱️ Tự ẩn sau: <input type="number" id="notifyDuration" min="0" max="60" step="1" value="${settings.notificationDuration}" style="width:50px;"> giây (0=không)</div>
+    <label><input type="checkbox" id="autoNotify"> Hiện thông báo update</label>
+    <div class="row">⏱️ Tự ẩn sau: <input type="number" id="notifyDuration" min="0" max="60" step="1" value="${settings.notificationDuration}" style="width:50px;"> giây</div>
 
     <br><br>
     Hotkey:
@@ -429,9 +485,9 @@ GM_addStyle(`
 
 #panel{
     position:fixed;
-    top:${clamp(settings.posY, 0, window.innerHeight - 100)}px;
-    left:${clamp(settings.posX, 0, window.innerWidth - 250)}px;
-    width:240px;
+    top:${clamp(settings.posY, 0, window.innerHeight - 120)}px;
+    left:${clamp(settings.posX, 0, window.innerWidth - 260)}px;
+    width:260px;
     padding:6px;
     background:var(--panel-bg);
     color:var(--panel-text);
@@ -440,11 +496,13 @@ GM_addStyle(`
     font-family:Tahoma;
     transition: opacity 0.2s ease, background 0.3s ease;
     opacity:${settings.opacity};
+    overflow:hidden;
 }
 #panel, #panel *{ user-select:none !important; }
 
 #header{display:flex;gap:3px;cursor:move;}
-.row{display:flex;gap:5px;margin:4px 0;align-items:center;}
+#settings{overflow-x:hidden;max-width:100%;}
+.row{display:flex;gap:5px;margin:4px 0;align-items:center;flex-wrap:wrap;}
 .row input{width:80px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--panel-text);}
 .row span{font-size:12px;}
 button{
@@ -459,6 +517,8 @@ button{
 }
 button:hover{background:var(--btn-hover);}
 button:active{transform:scale(0.9);}
+#pauseToggle{width:100%;}
+#pauseToggle.auto-disabled{background:#ff9800;color:#000;}
 .keybtn{width:90px;}
 
 #hotkeys div{
@@ -480,6 +540,49 @@ input[type="text"]{
     border:1px solid var(--input-border);
     background:var(--input-bg);
     color:var(--panel-text);
+}
+
+/* Labels and checkboxes */
+#settings label{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    font-size:12px;
+    color:var(--panel-text);
+    margin:3px 0;
+    white-space:nowrap;
+}
+#settings input[type="checkbox"]{
+    width:14px;
+    height:14px;
+    accent-color:var(--panel-text);
+}
+#settings strong{
+    display:block;
+    margin:8px 0 4px 0;
+    font-size:12px;
+    color:var(--panel-text);
+}
+#settings hr{
+    border:none;
+    border-top:1px solid var(--panel-border);
+    margin:10px 0;
+}
+#settings select{
+    padding:3px;
+    border-radius:4px;
+    background:var(--input-bg);
+    border:1px solid var(--input-border);
+    color:var(--panel-text);
+    font-size:11px;
+}
+#settings .feat-grid{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+}
+#settings .feat-grid label{
+    flex:0 0 auto;
 }
 
 /* Highlight volume input when boosted (>1) */
@@ -557,6 +660,275 @@ input[type="text"]{
 #panel{animation:fadeIn 0.3s ease;}
 }`);
 
+// ===== VIDEO INFO DISPLAY =====
+let videoInfoElement = null;
+
+function getVideoInfo() {
+    const v = getVideo();
+    if (!v) return null;
+
+    const videoId = getYouTubeVideoId();
+    const title = getYouTubeTitle();
+    const channel = getYouTubeChannel();
+
+    return {
+        title: title || "Unknown",
+        channel: channel || "Unknown",
+        videoId: videoId,
+        duration: v.duration,
+        currentTime: v.currentTime,
+        playbackRate: v.playbackRate,
+        volume: v.volume * (settings.volume > 1 ? settings.volume : 1),
+        src: v.currentSrc ? v.currentSrc.substring(0, 100) : "N/A"
+    };
+}
+
+function getYouTubeVideoId() {
+    try {
+        const url = window.location.href;
+        const match = url.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+        return match ? match[1] : null;
+    } catch (e) { return null; }
+}
+
+function getYouTubeTitle() {
+    try {
+        const titleEl = document.querySelector('h1.ytd-video-primary-info-renderer, h1.ytd-watch-metadata, h1');
+        return titleEl ? titleEl.textContent.trim() : null;
+    } catch (e) { return null; }
+}
+
+function getYouTubeChannel() {
+    try {
+        const channelEl = document.querySelector('#channel-name a, #owner-name a, ytd-channel-name a');
+        return channelEl ? channelEl.textContent.trim() : null;
+    } catch (e) { return null; }
+}
+
+function formatTime(seconds) {
+    if (!seconds || isNaN(seconds)) return "00:00";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function updateVideoInfo() {
+    if (!settings.showVideoInfo) {
+        if (videoInfoElement) {
+            videoInfoElement.remove();
+            videoInfoElement = null;
+        }
+        return;
+    }
+
+    const info = getVideoInfo();
+    if (!info) return;
+
+    if (!videoInfoElement) {
+        videoInfoElement = document.createElement("div");
+        videoInfoElement.id = "video-info-panel";
+        document.body.appendChild(videoInfoElement);
+    }
+
+    const progress = info.duration ? (info.currentTime / info.duration) * 100 : 0;
+
+    videoInfoElement.innerHTML = `
+        <div class="vi-header">📺 Video Info</div>
+        <div class="vi-content">
+            <div class="vi-row"><span class="vi-label">Title:</span> <span class="vi-value">${escapeHtml(info.title)}</span></div>
+            <div class="vi-row"><span class="vi-label">Channel:</span> <span class="vi-value">${escapeHtml(info.channel)}</span></div>
+            ${info.videoId ? `<div class="vi-row"><span class="vi-label">ID:</span> <span class="vi-value">${info.videoId}</span></div>` : ''}
+            <div class="vi-row"><span class="vi-label">Time:</span> <span class="vi-value">${formatTime(info.currentTime)} / ${formatTime(info.duration)}</span></div>
+            <div class="vi-progress"><div class="vi-progress-bar" style="width:${progress}%"></div></div>
+            <div class="vi-row"><span class="vi-label">Speed:</span> <span class="vi-value">${info.playbackRate}x</span></div>
+            <div class="vi-row"><span class="vi-label">Volume:</span> <span class="vi-value">${info.volume.toFixed(1)}x</span></div>
+        </div>
+    `;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ===== AUTO SKIP AD =====
+function skipAd() {
+    if (!settings.autoSkipAd) return;
+
+    // Skip button trên overlay quảng cáo
+    const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, [class*="skip-button"], .videoAdSkipButton');
+    if (skipBtn) {
+        console.log("Skipping ad...");
+        skipBtn.click();
+        return;
+    }
+
+    // Skip overlay quảng cáo
+    const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
+    if (adOverlay) {
+        adOverlay.click();
+        return;
+    }
+
+    // Check for "Ad playing" indicator
+    const adIndicator = document.querySelector('.ytp-ad-text, .ad-showing');
+    if (adIndicator) {
+        // Try to find skip button in various locations
+        const possibleSkip = document.querySelector('.ytp-ad-skip-button, [data-ad-skip]');
+        if (possibleSkip) {
+            possibleSkip.click();
+        }
+    }
+}
+
+// ===== FORCE LOOP =====
+function forceLoop() {
+    if (!settings.autoLoop) return;
+
+    const v = getVideo();
+    if (!v) return;
+
+    // Force loop by checking if video ended and restarting
+    if (v.ended || (v.currentTime >= v.duration - 0.5 && v.duration > 0)) {
+        console.log("Force looping video...");
+        v.currentTime = 0;
+        v.play().catch(e => console.warn("Play failed:", e));
+    }
+}
+
+// ===== CUSTOM UI =====
+function applyCustomUI() {
+    let customStyles = document.getElementById("yt-custom-ui");
+    if (!customStyles) {
+        customStyles = document.createElement("style");
+        customStyles.id = "yt-custom-ui";
+        document.head.appendChild(customStyles);
+    }
+
+    if (!settings.customUI) {
+        customStyles.innerHTML = "";
+        return;
+    }
+
+    let css = "";
+
+    // Remove Shorts
+    if (settings.removeShorts) {
+        css += `
+            ytd-rich-item-renderer[is-shorts], 
+            ytd-reel-shelf-renderer,
+            [is-shorts],
+            ytd-shorts-video-renderer,
+            .ytd-rich-grid-slim-media,
+            #segments-ads,
+            ytd-ad-slot-renderer { display: none !important; }
+        `;
+    }
+
+    // Remove Sidebar
+    if (settings.removeSidebar) {
+        css += `
+            #secondary, 
+            ytd-watch-next-secondary-results-renderer,
+            .ytd-watch-flexy #secondary { display: none !important; }
+            #primary { max-width: 100% !important; }
+        `;
+    }
+
+    // Custom YouTube styling
+    css += `
+        /* Custom dark theme */
+        .dark-theme-custom {
+            --yt-spec-brand-background-primary: #0f0f0f !important;
+            --yt-spec-app-background: #0f0f0f !important;
+            --yt-spec-general-background-a: #0f0f0f !important;
+            --yt-spec-general-background-b: #1a1a1a !important;
+        }
+        
+        /* Hide promotional banners */
+        .ytd-promoted-video-renderer,
+        .ytd-banner-promo-renderer { display: none !important; }
+        
+        /* Cleaner video player */
+        .ytp-chrome-bottom { opacity: 0.8 !important; }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px !important; }
+        ::-webkit-scrollbar-track { background: #1a1a1a !important; }
+        ::-webkit-scrollbar-thumb { background: #555 !important; border-radius: 4px !important; }
+        
+        /* Remove suggested video overlay */
+        .ytp-endscreen-content { display: none !important; }
+        
+        /* Darker recommendations */
+        ytd-watch-flexy[dark] #secondary-inner,
+        ytd-watch-flexy[dark] ytd-reel-shelf-renderer { opacity: 0.9 !important; }
+    `;
+
+    customStyles.innerHTML = css;
+    console.log("Custom UI applied");
+}
+
+// ===== VIDEO INFO PANEL STYLES =====
+GM_addStyle(`
+    #video-info-panel {
+        position: fixed;
+        bottom: 20px;
+        left: 20px;
+        background: rgba(0, 0, 0, 0.85);
+        color: #fff;
+        padding: 12px 16px;
+        border-radius: 10px;
+        font-family: Tahoma, sans-serif;
+        font-size: 12px;
+        z-index: 9998;
+        min-width: 220px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    #video-info-panel .vi-header {
+        font-weight: bold;
+        font-size: 13px;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.15);
+        color: #4CAF50;
+    }
+    #video-info-panel .vi-row {
+        display: flex;
+        justify-content: space-between;
+        margin: 4px 0;
+    }
+    #video-info-panel .vi-label {
+        color: #aaa;
+    }
+    #video-info-panel .vi-value {
+        color: #fff;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: right;
+    }
+    #video-info-panel .vi-progress {
+        height: 4px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 2px;
+        margin: 8px 0;
+        overflow: hidden;
+    }
+    #video-info-panel .vi-progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #4CAF50, #8BC34A);
+        border-radius: 2px;
+        transition: width 0.3s ease;
+    }
+`);
+
 // ===== INIT =====
 function init(){
     // Check if body exists, if not wait
@@ -572,10 +944,22 @@ function init(){
     initEventListeners();
     initVideoDetection();
     
-    // FIX: Thêm logging để debug
-    console.log("Video Control Panel PRO initialized");
+    // Initialize video info if enabled
+    if (settings.showVideoInfo) {
+        setTimeout(() => {
+            const v = getVideo();
+            if (v) {
+                videoInfoInterval = setInterval(updateVideoInfo, 1000);
+            }
+        }, 1000);
+    }
+
+    // Initialize custom UI if enabled
+    if (settings.customUI) {
+        setTimeout(applyCustomUI, 1000);
+    }
     
-    // FIX: Thêm smooth transitions cho tất cả các elements
+    console.log("Video Control Panel PRO initialized");
     addSmoothTransitions();
 }
 
@@ -701,9 +1085,91 @@ panel.querySelector("#autoShow").onchange = e => {
 panel.querySelector("#autoVideo").onchange = e => {
     settings.autoVideo = e.target.checked;
     GM_setValue("settings", settings);
-    // FIX: Thêm logging để debug
     console.log("Auto video:", settings.autoVideo);
 };
+
+const autoResumeCheckbox = document.getElementById("autoResume");
+if (autoResumeCheckbox) {
+    autoResumeCheckbox.checked = settings.autoResume !== false;
+    autoResumeCheckbox.onchange = e => {
+        settings.autoResume = e.target.checked;
+        GM_setValue("settings", settings);
+        console.log("Auto resume:", settings.autoResume);
+    };
+}
+
+// ===== VIDEO INFO & CUSTOM UI SETTINGS =====
+const showVideoInfoCheckbox = document.getElementById("showVideoInfo");
+const autoSkipAdCheckbox = document.getElementById("autoSkipAd");
+const customUICheckbox = document.getElementById("customUI");
+const removeShortsCheckbox = document.getElementById("removeShorts");
+const removeSidebarCheckbox = document.getElementById("removeSidebar");
+
+if (showVideoInfoCheckbox) {
+    showVideoInfoCheckbox.checked = settings.showVideoInfo !== false;
+    showVideoInfoCheckbox.onchange = e => {
+        settings.showVideoInfo = e.target.checked;
+        GM_setValue("settings", settings);
+        if (!settings.showVideoInfo && videoInfoElement) {
+            videoInfoElement.remove();
+            videoInfoElement = null;
+        }
+        console.log("Show video info:", settings.showVideoInfo);
+    };
+}
+
+if (autoSkipAdCheckbox) {
+    autoSkipAdCheckbox.checked = settings.autoSkipAd !== false;
+    autoSkipAdCheckbox.onchange = e => {
+        settings.autoSkipAd = e.target.checked;
+        GM_setValue("settings", settings);
+        console.log("Auto skip ad:", settings.autoSkipAd);
+    };
+}
+
+const autoLoopCheckbox = document.getElementById("autoLoop");
+if (autoLoopCheckbox) {
+    autoLoopCheckbox.checked = settings.autoLoop !== false;
+    autoLoopCheckbox.onchange = e => {
+        settings.autoLoop = e.target.checked;
+        GM_setValue("settings", settings);
+        
+        // Apply loop immediately to current video
+        const v = getVideo();
+        if (v) {
+            v.loop = settings.autoLoop;
+        }
+        console.log("Auto loop:", settings.autoLoop);
+    };
+}
+
+if (customUICheckbox) {
+    customUICheckbox.checked = settings.customUI || false;
+    customUICheckbox.onchange = e => {
+        settings.customUI = e.target.checked;
+        GM_setValue("settings", settings);
+        applyCustomUI();
+        console.log("Custom UI:", settings.customUI);
+    };
+}
+
+if (removeShortsCheckbox) {
+    removeShortsCheckbox.checked = settings.removeShorts || false;
+    removeShortsCheckbox.onchange = e => {
+        settings.removeShorts = e.target.checked;
+        GM_setValue("settings", settings);
+        applyCustomUI();
+    };
+}
+
+if (removeSidebarCheckbox) {
+    removeSidebarCheckbox.checked = settings.removeSidebar || false;
+    removeSidebarCheckbox.onchange = e => {
+        settings.removeSidebar = e.target.checked;
+        GM_setValue("settings", settings);
+        applyCustomUI();
+    };
+}
 
 // ===== WALL =====
 const wallInput = panel.querySelector("#wall");
@@ -807,6 +1273,19 @@ compactModeCheckbox.onchange = () => {
 // Apply compact mode on load
 applyCompactMode();
 
+// ===== AUTO RESUME TOGGLE =====
+const pauseToggleBtn = panel.querySelector("#pauseToggle");
+pauseToggleBtn.textContent = settings.autoResume ? "⏸ Auto" : "▶ Auto";
+if(!settings.autoResume) pauseToggleBtn.classList.add("auto-disabled");
+
+pauseToggleBtn.onclick = () => {
+    settings.autoResume = !settings.autoResume;
+    GM_setValue("settings", settings);
+    pauseToggleBtn.textContent = settings.autoResume ? "⏸ Auto" : "▶ Auto";
+    pauseToggleBtn.classList.toggle("auto-disabled", !settings.autoResume);
+    console.log("Auto resume:", settings.autoResume);
+};
+
 // ===== UPDATE SETTINGS =====
 const updateIntervalSelect = panel.querySelector("#updateInterval");
 const autoNotifyCheckbox = panel.querySelector("#autoNotify");
@@ -843,7 +1322,10 @@ const actions = [
     {key:"speedDown",name:"Speed-"},
     {key:"volUp",name:"Vol+"},
     {key:"volDown",name:"Vol-"},
-    {key:"moveToMouse",name:"ToMouse"}
+    {key:"moveToMouse",name:"ToMouse"},
+    {key:"toggleVideoInfo",name:"VideoInfo"},
+    {key:"toggleCustomUI",name:"CustomUI"},
+    {key:"toggleLoop",name:"Loop"}
 ];
 
 const hkDiv = panel.querySelector("#hotkeys");
@@ -990,7 +1472,7 @@ function handle(a){
                 }, 300);
             }
             applyVideo();
-            break;
+            return;
 
         case "speedUp": 
             settings.speed = clamp(settings.speed + 0.1, 0.1, 16); 
@@ -1014,16 +1496,54 @@ function handle(a){
             break;
 
         case "moveToMouse":
-            // FIX: Smooth move animation
             panel.style.transition = "left 0.2s ease, top 0.2s ease";
-            panel.style.left = clamp(lastMouseX, 0, window.innerWidth - 250) + "px";
-            panel.style.top = clamp(lastMouseY, 0, window.innerHeight - 100) + "px";
+            panel.style.left = clamp(lastMouseX, 0, window.innerWidth - 260) + "px";
+            panel.style.top = clamp(lastMouseY, 0, window.innerHeight - 120) + "px";
             setTimeout(() => {
                 panel.style.transition = "opacity 0.2s ease, background 0.3s ease, transform 0.2s ease";
             }, 200);
-            break;
+            return;
+
+        case "toggleVideoInfo":
+            settings.showVideoInfo = !settings.showVideoInfo;
+            if (!settings.showVideoInfo) {
+                if (videoInfoElement) {
+                    videoInfoElement.remove();
+                    videoInfoElement = null;
+                }
+                if (videoInfoInterval) {
+                    clearInterval(videoInfoInterval);
+                    videoInfoInterval = null;
+                }
+            } else {
+                // Re-initialize video info
+                updateVideoInfo();
+                const v = getVideo();
+                if (v) {
+                    videoInfoInterval = setInterval(updateVideoInfo, 1000);
+                }
+            }
+            GM_setValue("settings", settings);
+            console.log("Toggle video info:", settings.showVideoInfo);
+            return; // Don't call applyVideo() for toggle
+
+        case "toggleCustomUI":
+            settings.customUI = !settings.customUI;
+            applyCustomUI();
+            GM_setValue("settings", settings);
+            console.log("Toggle custom UI:", settings.customUI);
+            return; // Don't call applyVideo() for toggle
+
+        case "toggleLoop":
+            settings.autoLoop = !settings.autoLoop;
+            const v = getVideo();
+            if (v) v.loop = settings.autoLoop;
+            GM_setValue("settings", settings);
+            console.log("Toggle loop:", settings.autoLoop);
+            return;
     }
 
+    // Only call applyVideo and update inputs for non-toggle actions
     GM_setValue("settings", settings);
     applyVideo();
     
@@ -1057,8 +1577,8 @@ document.addEventListener("mousemove", e => {
 
     if(raf) cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
-        const newLeft = clamp(e.clientX - offsetX, 0, window.innerWidth - 250);
-        const newTop = clamp(e.clientY - offsetY, 0, window.innerHeight - 100);
+        const newLeft = clamp(e.clientX - offsetX, 0, window.innerWidth - 260);
+        const newTop = clamp(e.clientY - offsetY, 0, window.innerHeight - 120);
         panel.style.left = newLeft + "px";
         panel.style.top = newTop + "px";
         raf = null;
@@ -1096,11 +1616,10 @@ panel.querySelector("#min").onclick = () => {
 // ===== VIDEO DETECTION =====
 let detectionTimeout = null;
 let lastDetectionTime = 0;
-const DETECTION_DEBOUNCE = 100; // ms
+const DETECTION_DEBOUNCE = 100;
 
 function detectVideoOnce(){
     const now = Date.now();
-    // Debounce: tránh gọi quá频繁
     if(now - lastDetectionTime < DETECTION_DEBOUNCE){
         if(detectionTimeout) clearTimeout(detectionTimeout);
         detectionTimeout = setTimeout(() => detectVideoOnce(), DETECTION_DEBOUNCE);
@@ -1111,19 +1630,16 @@ function detectVideoOnce(){
     const v = getVideo();
 
     if(v !== lastVideo){
-        // Cleanup old video listeners
         if(lastVideo){
             lastVideo.removeEventListener('canplay', onVideoReady);
             lastVideo.removeEventListener('loadedmetadata', onVideoReady);
             lastVideo.removeEventListener('error', onVideoError);
-            // FIX: Cleanup audio context khi video bị remove
             cleanupAudioContext(lastVideo);
         }
         
         lastVideo = v;
 
         if(settings.autoVideo){
-            // FIX: Smooth show/hide animation
             if(v){
                 panel.style.display = "block";
                 panel.style.animation = "fadeIn 0.3s ease";
@@ -1136,16 +1652,22 @@ function detectVideoOnce(){
         }
 
         if(v){
-            // FIX: Thêm logging để debug
             console.log("Video detected:", v.src || v.currentSrc);
             
-            // Thêm listeners cho video mới
             v.addEventListener('canplay', onVideoReady);
             v.addEventListener('loadedmetadata', onVideoReady);
             v.addEventListener('error', onVideoError);
             
-            // Apply ngay nếu video đã sẵn sàng
-            if(v.readyState >= 2){ // HAVE_CURRENT_DATA or higher
+            // Apply loop setting to new video
+            v.loop = settings.autoLoop;
+            
+            // Start video info update interval
+            if (videoInfoInterval) clearInterval(videoInfoInterval);
+            if (settings.showVideoInfo) {
+                videoInfoInterval = setInterval(updateVideoInfo, 1000);
+            }
+            
+            if(v.readyState >= 2){
                 applyVideo();
             }
         }
@@ -1281,14 +1803,24 @@ function initVideoDetection(){
         attributes: true,
         attributeFilter: ['src', 'currentSrc', 'style', 'class']
     });
+
+    // Auto skip ad interval
+    if (settings.autoSkipAd) {
+        setInterval(skipAd, 1000);
+    }
+
+    // Force loop interval
+    if (settings.autoLoop) {
+        setInterval(forceLoop, 500);
+    }
 }
 
 // ===== EVENT LISTENERS =====
 function initEventListeners(){
     // Window resize - đảm bảo panel không bị mất
     window.addEventListener("resize", () => {
-        panel.style.left = clamp(parseInt(panel.style.left) || 0, 0, window.innerWidth - 250) + "px";
-        panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 100) + "px";
+        panel.style.left = clamp(parseInt(panel.style.left) || 0, 0, window.innerWidth - 260) + "px";
+        panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 120) + "px";
         // FIX: Thêm logging để debug
         console.log("Window resized, panel position adjusted");
     });
@@ -1302,5 +1834,8 @@ console.log("Video Control Panel PRO v" + CURRENT_VERSION + " - Optimized with i
 
 // Check for updates on startup
 checkForUpdates();
+
+// Check for conflicts with LITE version
+setTimeout(checkConflict, 2000);
 
 })();
