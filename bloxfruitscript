@@ -1,3 +1,5 @@
+
+
 local queue = queue_on_teleport or syn and syn.queue_on_teleport
 
 if queue then
@@ -9,74 +11,97 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
 -- GUI
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BloxFruitHealthUI"
-screenGui.Parent = player:WaitForChild("PlayerGui")
+local gui = Instance.new("ScreenGui")
+gui.Name = "ProHUD"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
 
--- Khung nền
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 250, 0, 25)
-frame.Position = UDim2.new(0, 10, 0, 10)
-frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
-frame.BorderSizePixel = 0
-frame.Parent = screenGui
+-- ===== TẠO BAR =====
+local function createBar(yPos, color)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 250, 0, 20)
+    frame.Position = UDim2.new(0, 10, 0, yPos)
+    frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+    frame.BorderSizePixel = 0
+    frame.Parent = gui
 
--- Bo góc cho đẹp
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 6)
-corner.Parent = frame
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, 6)
 
--- Thanh máu
-local healthBar = Instance.new("Frame")
-healthBar.Size = UDim2.new(1, 0, 1, 0)
-healthBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
-healthBar.BorderSizePixel = 0
-healthBar.Parent = frame
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(1, 0, 1, 0)
+    bar.BackgroundColor3 = color
+    bar.BorderSizePixel = 0
+    bar.Parent = frame
 
-local barCorner = Instance.new("UICorner")
-barCorner.CornerRadius = UDim.new(0, 6)
-barCorner.Parent = healthBar
+    local barCorner = Instance.new("UICorner", bar)
+    barCorner.CornerRadius = UDim.new(0, 6)
 
--- Text
-local text = Instance.new("TextLabel")
-text.Size = UDim2.new(1, 0, 1, 0)
-text.BackgroundTransparency = 1
-text.TextColor3 = Color3.fromRGB(255,255,255)
-text.TextScaled = true
-text.Font = Enum.Font.SourceSansBold
-text.Parent = frame
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.new(1,0,1,0)
+    text.BackgroundTransparency = 1
+    text.TextColor3 = Color3.fromRGB(255,255,255)
+    text.TextScaled = true
+    text.Font = Enum.Font.SourceSansBold
+    text.Parent = frame
 
--- Setup nhân vật
-local function setupCharacter(character)
-    local humanoid = character:WaitForChild("Humanoid")
+    return bar, text
+end
+
+-- Tạo 2 thanh
+local hpBar, hpText = createBar(10, Color3.fromRGB(0,255,0))
+local enBar, enText = createBar(40, Color3.fromRGB(0,150,255))
+
+-- ===== SETUP =====
+local function setup(char)
+    local humanoid = char:WaitForChild("Humanoid")
+
+    -- cố tìm energy thật
+    local energy = player:FindFirstChild("Energy")
+    local maxEnergy = player:FindFirstChild("MaxEnergy")
 
     local function update()
+        -- HP
         local hp = humanoid.Health
         local maxHp = humanoid.MaxHealth
-        local percent = hp / maxHp
+        local hpPercent = hp / maxHp
 
-        -- Cập nhật thanh
-        healthBar.Size = UDim2.new(percent, 0, 1, 0)
+        hpBar.Size = UDim2.new(hpPercent,0,1,0)
+        hpText.Text = math.floor(hp).." / "..math.floor(maxHp)
 
-        -- Đổi màu kiểu Blox Fruits
-        if percent > 0.6 then
-            healthBar.BackgroundColor3 = Color3.fromRGB(0,255,0) -- xanh
-        elseif percent > 0.3 then
-            healthBar.BackgroundColor3 = Color3.fromRGB(255,170,0) -- vàng
+        if hpPercent > 0.6 then
+            hpBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
+        elseif hpPercent > 0.3 then
+            hpBar.BackgroundColor3 = Color3.fromRGB(255,170,0)
         else
-            healthBar.BackgroundColor3 = Color3.fromRGB(255,0,0) -- đỏ
+            hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
         end
 
-        -- Text
-        text.Text = math.floor(hp) .. " / " .. math.floor(maxHp)
+        -- ENERGY
+        if energy and maxEnergy then
+            local en = energy.Value
+            local maxEn = maxEnergy.Value
+            local percent = en / maxEn
+
+            enBar.Size = UDim2.new(percent,0,1,0)
+            enText.Text = math.floor(en).." / "..math.floor(maxEn)
+        else
+            -- fallback nếu không đọc được
+            enBar.Size = UDim2.new(1,0,1,0)
+            enText.Text = "ENERGY ?"
+        end
     end
 
     update()
     humanoid.HealthChanged:Connect(update)
+
+    if energy then
+        energy:GetPropertyChangedSignal("Value"):Connect(update)
+    end
 end
 
 if player.Character then
-    setupCharacter(player.Character)
+    setup(player.Character)
 end
 
-player.CharacterAdded:Connect(setupCharacter)
+player.CharacterAdded:Connect(setup)
