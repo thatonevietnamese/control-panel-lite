@@ -6,16 +6,6 @@ if queue then
     ]])
 end
 --Fix bắt đầu từ đây
--- ===== AUTO QUEUE (QUAN TRỌNG) =====
-local URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"
-
-local queue = queue_on_teleport or syn and syn.queue_on_teleport
-if queue then
-    queue([[
-        loadstring(game:HttpGet("]]..URL..[["))()
-    ]])
-end
-
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
