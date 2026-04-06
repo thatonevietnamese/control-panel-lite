@@ -1,0 +1,75 @@
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BloxFruitHealthUI"
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Khung nền
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 250, 0, 25)
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+-- Bo góc cho đẹp
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 6)
+corner.Parent = frame
+
+-- Thanh máu
+local healthBar = Instance.new("Frame")
+healthBar.Size = UDim2.new(1, 0, 1, 0)
+healthBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
+healthBar.BorderSizePixel = 0
+healthBar.Parent = frame
+
+local barCorner = Instance.new("UICorner")
+barCorner.CornerRadius = UDim.new(0, 6)
+barCorner.Parent = healthBar
+
+-- Text
+local text = Instance.new("TextLabel")
+text.Size = UDim2.new(1, 0, 1, 0)
+text.BackgroundTransparency = 1
+text.TextColor3 = Color3.fromRGB(255,255,255)
+text.TextScaled = true
+text.Font = Enum.Font.SourceSansBold
+text.Parent = frame
+
+-- Setup nhân vật
+local function setupCharacter(character)
+    local humanoid = character:WaitForChild("Humanoid")
+
+    local function update()
+        local hp = humanoid.Health
+        local maxHp = humanoid.MaxHealth
+        local percent = hp / maxHp
+
+        -- Cập nhật thanh
+        healthBar.Size = UDim2.new(percent, 0, 1, 0)
+
+        -- Đổi màu kiểu Blox Fruits
+        if percent > 0.6 then
+            healthBar.BackgroundColor3 = Color3.fromRGB(0,255,0) -- xanh
+        elseif percent > 0.3 then
+            healthBar.BackgroundColor3 = Color3.fromRGB(255,170,0) -- vàng
+        else
+            healthBar.BackgroundColor3 = Color3.fromRGB(255,0,0) -- đỏ
+        end
+
+        -- Text
+        text.Text = math.floor(hp) .. " / " .. math.floor(maxHp)
+    end
+
+    update()
+    humanoid.HealthChanged:Connect(update)
+end
+
+if player.Character then
+    setupCharacter(player.Character)
+end
+
+player.CharacterAdded:Connect(setupCharacter)
