@@ -1,5 +1,3 @@
-
-
 local queue = queue_on_teleport or syn and syn.queue_on_teleport
 
 if queue then
@@ -7,10 +5,22 @@ if queue then
         loadstring(game:HttpGet("https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"))()
     ]])
 end
+--Fix bắt đầu từ đây
+-- ===== AUTO QUEUE (QUAN TRỌNG) =====
+local URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"
+
+local queue = queue_on_teleport or syn and syn.queue_on_teleport
+if queue then
+    queue([[
+        loadstring(game:HttpGet("]]..URL..[["))()
+    ]])
+end
+
+-- ===== SERVICES =====
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
--- GUI
+-- ===== GUI =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "ProHUD"
 gui.ResetOnSpawn = false
@@ -25,8 +35,7 @@ local function createBar(yPos, color)
     frame.BorderSizePixel = 0
     frame.Parent = gui
 
-    local corner = Instance.new("UICorner", frame)
-    corner.CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
 
     local bar = Instance.new("Frame")
     bar.Size = UDim2.new(1, 0, 1, 0)
@@ -34,8 +43,7 @@ local function createBar(yPos, color)
     bar.BorderSizePixel = 0
     bar.Parent = frame
 
-    local barCorner = Instance.new("UICorner", bar)
-    barCorner.CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
 
     local text = Instance.new("TextLabel")
     text.Size = UDim2.new(1,0,1,0)
@@ -48,17 +56,36 @@ local function createBar(yPos, color)
     return bar, text
 end
 
--- Tạo 2 thanh
+-- ===== TẠO UI =====
 local hpBar, hpText = createBar(10, Color3.fromRGB(0,255,0))
 local enBar, enText = createBar(40, Color3.fromRGB(0,150,255))
+
+-- ===== ENERGY UI HOOK =====
+local energyLabel
+
+local function findEnergyLabel()
+    local gui = player:WaitForChild("PlayerGui")
+    local main = gui:FindFirstChild("Main")
+    if main then
+        local energy = main:FindFirstChild("Energy")
+        if energy then
+            return energy:FindFirstChild("TextLabel")
+        end
+    end
+end
+
+local function getEnergy()
+    if not energyLabel then return end
+    local text = energyLabel.Text
+    local current, max = string.match(text, "(%d+)%s*/%s*(%d+)")
+    return tonumber(current), tonumber(max)
+end
 
 -- ===== SETUP =====
 local function setup(char)
     local humanoid = char:WaitForChild("Humanoid")
 
-    -- cố tìm energy thật
-    local energy = player:FindFirstChild("Energy")
-    local maxEnergy = player:FindFirstChild("MaxEnergy")
+    energyLabel = findEnergyLabel()
 
     local function update()
         -- HP
@@ -77,26 +104,22 @@ local function setup(char)
             hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
         end
 
-        -- ENERGY
-        if energy and maxEnergy then
-            local en = energy.Value
-            local maxEn = maxEnergy.Value
+        -- ENERGY REAL
+        local en, maxEn = getEnergy()
+        if en and maxEn then
             local percent = en / maxEn
-
             enBar.Size = UDim2.new(percent,0,1,0)
-            enText.Text = math.floor(en).." / "..math.floor(maxEn)
+            enText.Text = en.." / "..maxEn
         else
-            -- fallback nếu không đọc được
-            enBar.Size = UDim2.new(1,0,1,0)
-            enText.Text = "ENERGY ?"
+            enText.Text = "Loading..."
         end
     end
 
     update()
     humanoid.HealthChanged:Connect(update)
 
-    if energy then
-        energy:GetPropertyChangedSignal("Value"):Connect(update)
+    if energyLabel then
+        energyLabel:GetPropertyChangedSignal("Text"):Connect(update)
     end
 end
 
