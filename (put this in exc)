@@ -1,0 +1,26 @@
+Note:
+local URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"
+
+local function loadScript()
+    local success, result = pcall(function()
+        return game:HttpGet(URL)
+    end)
+
+    if success and result then
+        loadstring(result)()
+    else
+        warn("Load lỗi!")
+    end
+end
+
+-- 🔥 QUAN TRỌNG: queue lại CHÍNH NÓ
+local queue = queue_on_teleport or syn and syn.queue_on_teleport
+
+if queue then
+    queue([[
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"))()
+    ]])
+end
+
+-- chạy
+loadScript()
