@@ -10,6 +10,10 @@ end
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
+-- ===== XOÁ GUI CŨ (FIX NHÂN ĐÔI) =====
+local old = player:WaitForChild("PlayerGui"):FindFirstChild("ProHUD")
+if old then old:Destroy() end
+
 -- ===== GUI =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "ProHUD"
@@ -46,11 +50,11 @@ local function createBar(yPos, color)
     return bar, text
 end
 
--- ===== TẠO UI =====
+-- ===== UI =====
 local hpBar, hpText = createBar(10, Color3.fromRGB(0,255,0))
 local enBar, enText = createBar(40, Color3.fromRGB(0,150,255))
 
--- ===== ENERGY UI HOOK =====
+-- ===== ENERGY HOOK =====
 local energyLabel
 
 local function findEnergyLabel()
@@ -75,7 +79,12 @@ end
 local function setup(char)
     local humanoid = char:WaitForChild("Humanoid")
 
-    energyLabel = findEnergyLabel()
+    -- tìm lại energy mỗi lần respawn
+    energyLabel = nil
+    repeat
+        energyLabel = findEnergyLabel()
+        task.wait(0.5)
+    until energyLabel
 
     local function update()
         -- HP
@@ -94,7 +103,7 @@ local function setup(char)
             hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
         end
 
-        -- ENERGY REAL
+        -- ENERGY
         local en, maxEn = getEnergy()
         if en and maxEn then
             local percent = en / maxEn
@@ -108,11 +117,10 @@ local function setup(char)
     update()
     humanoid.HealthChanged:Connect(update)
 
-    if energyLabel then
-        energyLabel:GetPropertyChangedSignal("Text"):Connect(update)
-    end
+    energyLabel:GetPropertyChangedSignal("Text"):Connect(update)
 end
 
+-- ===== RUN =====
 if player.Character then
     setup(player.Character)
 end
