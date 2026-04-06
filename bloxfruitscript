@@ -1,3 +1,8 @@
+-- ===== SINGLETON (KHÔNG CHẠY 2 LẦN) =====
+if getgenv().ProHUD_Loaded then return end
+getgenv().ProHUD_Loaded = true
+
+
 local queue = queue_on_teleport or syn and syn.queue_on_teleport
 
 if queue then
@@ -8,17 +13,18 @@ end
 --Fix bắt đầu từ đây
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
 
--- ===== XOÁ GUI CŨ (FIX NHÂN ĐÔI) =====
-local old = player:WaitForChild("PlayerGui"):FindFirstChild("ProHUD")
+-- ===== XÓA GUI CŨ =====
+local old = CoreGui:FindFirstChild("ProHUD")
 if old then old:Destroy() end
 
 -- ===== GUI =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "ProHUD"
 gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
+gui.Parent = CoreGui
 
 -- ===== TẠO BAR =====
 local function createBar(yPos, color)
@@ -79,7 +85,7 @@ end
 local function setup(char)
     local humanoid = char:WaitForChild("Humanoid")
 
-    -- tìm lại energy mỗi lần respawn
+    -- tìm energy mỗi lần respawn
     energyLabel = nil
     repeat
         energyLabel = findEnergyLabel()
@@ -116,13 +122,15 @@ local function setup(char)
 
     update()
     humanoid.HealthChanged:Connect(update)
-
     energyLabel:GetPropertyChangedSignal("Text"):Connect(update)
 end
 
 -- ===== RUN =====
 if player.Character then
     setup(player.Character)
+end
+
+player.CharacterAdded:Connect(setup)
 end
 
 player.CharacterAdded:Connect(setup)
