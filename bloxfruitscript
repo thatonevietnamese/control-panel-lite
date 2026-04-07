@@ -16,19 +16,20 @@ local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local player = Players.LocalPlayer
 
--- ===== XÓA GUI CŨ =====
-local old = CoreGui:FindFirstChild("ProHUD")
-if old then old:Destroy() end
+-- ===== GUI (KHÔNG TẠO LẠI NẾU ĐÃ CÓ) =====
+local gui = CoreGui:FindFirstChild("ProHUD")
 
--- ===== GUI =====
-local gui = Instance.new("ScreenGui")
-gui.Name = "ProHUD"
-gui.ResetOnSpawn = false
-gui.Parent = CoreGui
+if not gui then
+    gui = Instance.new("ScreenGui")
+    gui.Name = "ProHUD"
+    gui.ResetOnSpawn = false
+    gui.Parent = CoreGui
+end
 
--- ===== TẠO BAR =====
-local function createBar(yPos, color)
+-- ===== CREATE BAR (CÓ NAME) =====
+local function createBar(name, yPos, color)
     local frame = Instance.new("Frame")
+    frame.Name = name
     frame.Size = UDim2.new(0, 250, 0, 20)
     frame.Position = UDim2.new(0, 10, 0, yPos)
     frame.BackgroundColor3 = Color3.fromRGB(30,30,30)
@@ -38,6 +39,7 @@ local function createBar(yPos, color)
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
 
     local bar = Instance.new("Frame")
+    bar.Name = "BAR"
     bar.Size = UDim2.new(1, 0, 1, 0)
     bar.BackgroundColor3 = color
     bar.BorderSizePixel = 0
@@ -46,6 +48,7 @@ local function createBar(yPos, color)
     Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
 
     local text = Instance.new("TextLabel")
+    text.Name = "TEXT"
     text.Size = UDim2.new(1,0,1,0)
     text.BackgroundTransparency = 1
     text.TextColor3 = Color3.fromRGB(255,255,255)
@@ -56,11 +59,29 @@ local function createBar(yPos, color)
     return bar, text
 end
 
--- ===== UI =====
-local hpBar, hpText = createBar(10, Color3.fromRGB(0,255,0))
-local enBar, enText = createBar(40, Color3.fromRGB(0,150,255))
+-- ===== HP BAR =====
+local hpFrame = gui:FindFirstChild("HP_BAR")
+local hpBar, hpText
 
--- ===== ENERGY =====
+if not hpFrame then
+    hpBar, hpText = createBar("HP_BAR", 10, Color3.fromRGB(0,255,0))
+else
+    hpBar = hpFrame:FindFirstChild("BAR")
+    hpText = hpFrame:FindFirstChild("TEXT")
+end
+
+-- ===== ENERGY BAR =====
+local enFrame = gui:FindFirstChild("EN_BAR")
+local enBar, enText
+
+if not enFrame then
+    enBar, enText = createBar("EN_BAR", 40, Color3.fromRGB(0,150,255))
+else
+    enBar = enFrame:FindFirstChild("BAR")
+    enText = enFrame:FindFirstChild("TEXT")
+end
+
+-- ===== ENERGY FIND =====
 local energyLabel
 
 local function findEnergyLabel()
@@ -88,9 +109,8 @@ local function setup(char)
     local humanoid = char:FindFirstChild("Humanoid") or char:WaitForChild("Humanoid", 5)
     if not humanoid then return end
 
-    energyLabel = nil
-
     -- tìm energy async
+    energyLabel = nil
     task.spawn(function()
         while not energyLabel do
             local ok, result = pcall(findEnergyLabel)
@@ -103,7 +123,7 @@ local function setup(char)
 
     local function update()
         -- HP
-        if humanoid and humanoid.Parent then
+        if humanoid and humanoid.Parent and hpBar then
             local hp = humanoid.Health or 0
             local maxHp = humanoid.MaxHealth or 1
             local hpPercent = hp / maxHp
@@ -121,16 +141,50 @@ local function setup(char)
         end
 
         -- ENERGY
-        if energyLabel then
-            local ok, en, maxEn = pcall(getEnergy)
-            if ok and en and maxEn then
-                local percent = en / maxEn
-                enBar.Size = UDim2.new(percent,0,1,0)
-                enText.Text = en.." / "..maxEn
+        if enBar and enText then
+            if energyLabel then
+                local ok, en, maxEn = pcall(getEnergy)
+                if ok and en and maxEn then
+                    local percent = en / maxEn
+                    enBar.Size = UDim2.new(percent,0,1,0)
+                    enText.Text = en.." / "..maxEn
+                else
+                    enText.Text = "..."
+                end
             else
                 enText.Text = "..."
             end
-        else
+        end
+    end
+
+    -- LOOP UPDATE (KHÔNG BAO GIỜ CHẾT)
+    task.spawn(function()
+        while char.Parent do
+            pcall(update)
+            task.wait(0.2)
+        end
+    end)
+
+    humanoid.HealthChanged:Connect(function()
+        pcall(update)
+    end)
+
+    task.spawn(function()
+        repeat task.wait() until energyLabel
+        if energyLabel then
+            energyLabel:GetPropertyChangedSignal("Text"):Connect(function()
+                pcall(update)
+            end)
+        end
+    end)
+end
+
+-- ===== RUN =====
+if player.Character then
+    setup(player.Character)
+end
+
+player.CharacterAdded:Connect(setup)
             enText.Text = "..."
         end
     end
