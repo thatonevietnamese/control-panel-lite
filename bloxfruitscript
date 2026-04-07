@@ -86,13 +86,10 @@ local function setup(char)
     local humanoid = char:WaitForChild("Humanoid")
 
     -- tìm energy mỗi lần respawn
-    energyLabel = nil
-    repeat
-        energyLabel = findEnergyLabel()
-        task.wait(0.5)
-    until energyLabel
-
-    local function update()
+repeat
+    energyLabel = findEnergyLabel()
+    task.wait(0.5)
+until energyLabel and energyLabel:IsA("TextLabel")
         -- HP
         local hp = humanoid.Health
         local maxHp = humanoid.MaxHealth
