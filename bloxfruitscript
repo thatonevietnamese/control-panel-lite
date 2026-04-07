@@ -60,18 +60,20 @@ end
 local hpBar, hpText = createBar(10, Color3.fromRGB(0,255,0))
 local enBar, enText = createBar(40, Color3.fromRGB(0,150,255))
 
--- ===== ENERGY HOOK =====
+-- ===== ENERGY =====
 local energyLabel
 
 local function findEnergyLabel()
-    local gui = player:WaitForChild("PlayerGui")
+    local gui = player:FindFirstChild("PlayerGui")
+    if not gui then return end
+
     local main = gui:FindFirstChild("Main")
-    if main then
-        local energy = main:FindFirstChild("Energy")
-        if energy then
-            return energy:FindFirstChild("TextLabel")
-        end
-    end
+    if not main then return end
+
+    local energy = main:FindFirstChild("Energy")
+    if not energy then return end
+
+    return energy:FindFirstChild("TextLabel")
 end
 
 local function getEnergy()
@@ -83,51 +85,82 @@ end
 
 -- ===== SETUP =====
 local function setup(char)
-    local humanoid = char:WaitForChild("Humanoid")
+    local humanoid = char:FindFirstChild("Humanoid") or char:WaitForChild("Humanoid", 5)
+    if not humanoid then return end
 
-    -- tìm energy mỗi lần respawn
-repeat
-    energyLabel = findEnergyLabel()
-    task.wait(0.5)
-until energyLabel and energyLabel:IsA("TextLabel")
+    energyLabel = nil
+
+    -- tìm energy async
+    task.spawn(function()
+        while not energyLabel do
+            local ok, result = pcall(findEnergyLabel)
+            if ok and result and result:IsA("TextLabel") then
+                energyLabel = result
+            end
+            task.wait(0.5)
+        end
+    end)
+
+    local function update()
         -- HP
-        local hp = humanoid.Health
-        local maxHp = humanoid.MaxHealth
-        local hpPercent = hp / maxHp
+        if humanoid and humanoid.Parent then
+            local hp = humanoid.Health or 0
+            local maxHp = humanoid.MaxHealth or 1
+            local hpPercent = hp / maxHp
 
-        hpBar.Size = UDim2.new(hpPercent,0,1,0)
-        hpText.Text = math.floor(hp).." / "..math.floor(maxHp)
+            hpBar.Size = UDim2.new(hpPercent,0,1,0)
+            hpText.Text = math.floor(hp).." / "..math.floor(maxHp)
 
-        if hpPercent > 0.6 then
-            hpBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
-        elseif hpPercent > 0.3 then
-            hpBar.BackgroundColor3 = Color3.fromRGB(255,170,0)
-        else
-            hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
+            if hpPercent > 0.6 then
+                hpBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
+            elseif hpPercent > 0.3 then
+                hpBar.BackgroundColor3 = Color3.fromRGB(255,170,0)
+            else
+                hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
+            end
         end
 
         -- ENERGY
-        local en, maxEn = getEnergy()
-        if en and maxEn then
-            local percent = en / maxEn
-            enBar.Size = UDim2.new(percent,0,1,0)
-            enText.Text = en.." / "..maxEn
+        if energyLabel then
+            local ok, en, maxEn = pcall(getEnergy)
+            if ok and en and maxEn then
+                local percent = en / maxEn
+                enBar.Size = UDim2.new(percent,0,1,0)
+                enText.Text = en.." / "..maxEn
+            else
+                enText.Text = "..."
+            end
         else
-            enText.Text = "Loading..."
+            enText.Text = "..."
         end
     end
 
-    update()
-    humanoid.HealthChanged:Connect(update)
-    energyLabel:GetPropertyChangedSignal("Text"):Connect(update)
+    -- loop chống lỗi
+    task.spawn(function()
+        while char.Parent do
+            pcall(update)
+            task.wait(0.2)
+        end
+    end)
+
+    humanoid.HealthChanged:Connect(function()
+        pcall(update)
+    end)
+
+    -- energy change
+    task.spawn(function()
+        repeat task.wait() until energyLabel
+        if energyLabel then
+            energyLabel:GetPropertyChangedSignal("Text"):Connect(function()
+                pcall(update)
+            end)
+        end
+    end)
 end
 
 -- ===== RUN =====
 if player.Character then
     setup(player.Character)
-end
-
-player.CharacterAdded:Connect(setup)
 end
 
 player.CharacterAdded:Connect(setup)
