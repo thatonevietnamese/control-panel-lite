@@ -11,12 +11,12 @@ if queue then
     ]])
 end
 --Fix bắt đầu từ đây
--- ===== HARD RESET (CHỈ CHẠY 1 LẦN) =====
+-- ===== FORCE CLEAN (XOÁ MỌI HUD CŨ) =====
 local CoreGui = game:GetService("CoreGui")
-
-local old = CoreGui:FindFirstChild("ProHUD")
-if old then
-    old:Destroy()
+for _,v in pairs(CoreGui:GetChildren()) do
+    if v.Name == "ProHUD" then
+        v:Destroy()
+    end
 end
 -- ===== SERVICES =====
 local Players = game:GetService("Players")
@@ -56,65 +56,81 @@ local function createBar(name, yPos, color)
     return bar, text
 end
 
--- ===== CREATE 2 BAR DUY NHẤT =====
+-- ===== CREATE ONLY ONCE =====
 local hpBar, hpText = createBar("HP_BAR", 10, Color3.fromRGB(0,255,0))
 local enBar, enText = createBar("EN_BAR", 40, Color3.fromRGB(0,150,255))
 
--- ===== ENERGY FIND =====
-local function findEnergyLabel()
-    local gui = player:FindFirstChild("PlayerGui")
-    if not gui then return end
-
-    local main = gui:FindFirstChild("Main")
-    if not main then return end
-
-    local energy = main:FindFirstChild("Energy")
-    if not energy then return end
-
-    return energy:FindFirstChild("TextLabel")
-end
-
+-- ===== ENERGY FIND (ANTI FAIL) =====
 local energyLabel
 
 task.spawn(function()
     while not energyLabel do
-        local ok, result = pcall(findEnergyLabel)
-        if ok and result then
-            energyLabel = result
+        local gui = player:FindFirstChild("PlayerGui")
+        if gui then
+            local main = gui:FindFirstChild("Main")
+            if main then
+                local energy = main:FindFirstChild("Energy")
+                if energy then
+                    local txt = energy:FindFirstChildOfClass("TextLabel")
+                    if txt then
+                        energyLabel = txt
+                    end
+                end
+            end
         end
         task.wait(0.5)
     end
 end)
 
-local function getEnergy()
-    if not energyLabel then return end
+-- ===== SAFE ENERGY =====
+local function getEnergySafe()
+    if not energyLabel or not energyLabel.Text then
+        return 0, 100
+    end
+
     local current, max = string.match(energyLabel.Text, "(%d+)%s*/%s*(%d+)")
-    return tonumber(current), tonumber(max)
+    current = tonumber(current)
+    max = tonumber(max)
+
+    if not current or not max or max == 0 then
+        return 0, 100
+    end
+
+    return current, max
 end
 
--- ===== UPDATE LOOP =====
+-- ===== START =====
 local function start(char)
-    local humanoid = char:WaitForChild("Humanoid")
+    local humanoid = char:WaitForChild("Humanoid",5)
+    if not humanoid then return end
 
     task.spawn(function()
         while char.Parent do
-            -- HP
-            local hp = humanoid.Health
-            local maxHp = humanoid.MaxHealth
-            local hpPercent = hp / maxHp
+            -- ===== HP =====
+            local hp = humanoid.Health or 0
+            local maxHp = humanoid.MaxHealth or 100
+            local hpPercent = math.clamp(hp / maxHp, 0, 1)
 
             hpBar.Size = UDim2.new(hpPercent,0,1,0)
             hpText.Text = math.floor(hp).." / "..math.floor(maxHp)
+            hpBar.Visible = true
 
-            -- ENERGY
-            if energyLabel then
-                local en, maxEn = getEnergy()
-                if en and maxEn then
-                    local percent = en / maxEn
-                    enBar.Size = UDim2.new(percent,0,1,0)
-                    enText.Text = en.." / "..maxEn
-                end
+            -- đổi màu cho đẹp 😈
+            if hpPercent > 0.6 then
+                hpBar.BackgroundColor3 = Color3.fromRGB(0,255,0)
+            elseif hpPercent > 0.3 then
+                hpBar.BackgroundColor3 = Color3.fromRGB(255,170,0)
+            else
+                hpBar.BackgroundColor3 = Color3.fromRGB(255,0,0)
             end
+
+            -- ===== ENERGY =====
+            local en, maxEn = getEnergySafe()
+            local percent = math.clamp(en / maxEn, 0, 1)
+
+            enBar.Size = UDim2.new(percent,0,1,0)
+            enText.Text = math.floor(en).." / "..math.floor(maxEn)
+            enBar.Visible = true
 
             task.wait(0.2)
         end
