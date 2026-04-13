@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.3.2
+// @version      1.3.3
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -18,6 +18,7 @@
 // ===== SETTINGS =====
 const settings = GM_getValue("settings", {
     volume: 1,
+    speed: 1,
     color: "#2b5797",
     autoVideo: true,
     hotkey: "*"
@@ -125,6 +126,12 @@ function applyVolume(){
     }
 }
 
+function applySpeed(){
+    const v = getVideo();
+    if(!v) return;
+    v.playbackRate = settings.speed;
+}
+
 // ===== PANEL =====
 const panel = document.createElement("div");
 panel.id = "vcp-panel";
@@ -134,6 +141,11 @@ panel.innerHTML = `
         <span>🔊</span>
         <input type="range" id="vcp-slider" step="0.1" min="0" max="5" value="${settings.volume}">
         <input type="number" id="vcp-vol" step="0.1" min="0" max="5" value="${settings.volume}">
+        <div id="vcp-speed">
+            <button class="vcp-speed-btn" data-speed="1">1x</button>
+            <button class="vcp-speed-btn" data-speed="2">2x</button>
+            <button class="vcp-speed-btn" data-speed="3">3x</button>
+        </div>
         <button id="vcp-close">×</button>
     </div>
 `;
@@ -197,6 +209,23 @@ GM_addStyle(`
     background:linear-gradient(90deg,#fff3e0,#ffe0b2);
     font-weight:bold;
 }
+#vcp-speed{display:flex;gap:4px;}
+.vcp-speed-btn{
+    padding:4px 8px;
+    border:none;
+    border-radius:8px;
+    background:rgba(255,255,255,0.2);
+    color:white;
+    font-size:12px;
+    cursor:pointer;
+    transition:background 0.2s;
+}
+.vcp-speed-btn:hover{background:rgba(255,255,255,0.4);}
+.vcp-speed-btn.active{
+    background:#ff9800;
+    color:white;
+    font-weight:bold;
+}
 #vcp-close{
     background:transparent;
     border:none;
@@ -216,6 +245,7 @@ function detectVideo(){
         if(settings.autoVideo){
             panel.style.display = v ? "block" : "none";
             applyVolume();
+            applySpeed();
         }
     }
 }
@@ -306,6 +336,24 @@ volInput.addEventListener("input", () => {
     }
 });
 
+// ===== SPEED BUTTONS =====
+const speedBtns = panel.querySelectorAll(".vcp-speed-btn");
+function updateSpeedButtons(speed){
+    speedBtns.forEach(btn => {
+        btn.classList.toggle("active", parseFloat(btn.dataset.speed) === speed);
+    });
+}
+speedBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+        const speed = parseFloat(btn.dataset.speed);
+        settings.speed = speed;
+        GM_setValue("settings", settings);
+        applySpeed();
+        updateSpeedButtons(speed);
+    });
+});
+updateSpeedButtons(settings.speed);
+
 // ===== CLOSE BUTTON =====
 volClose.addEventListener("click", () => {
     panel.style.display = "none";
@@ -313,7 +361,6 @@ volClose.addEventListener("click", () => {
 
 // ===== TOGGLE HOTKEY =====
 document.addEventListener("keydown", e => {
-    // Toggle khi nhấn * (phím số 8 trên numpad hoặc Shift+8)
     if(e.key === "*" || (e.shiftKey && e.key === "8")){
         const v = getVideo();
         if(settings.autoVideo && !v){
@@ -373,7 +420,6 @@ function showUpdateNotification(newVersion) {
     `;
     document.body.appendChild(notification);
     
-    // FIX: Tự động remove sau 10 giây
     setTimeout(() => {
         if(notification.parentElement){
             notification.remove();
@@ -381,7 +427,6 @@ function showUpdateNotification(newVersion) {
     }, 10000);
 }
 
-// Kiểm tra cập nhật sau 3 giây khởi động
 setTimeout(checkForUpdates, 3000);
 
 // ===== START =====
