@@ -1,4 +1,4 @@
-Note:
+--Note:
 local URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/bloxfruitscript"
 
 local function loadScript()
