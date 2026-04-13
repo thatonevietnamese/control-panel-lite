@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      15.4
+// @version      16.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -9,7 +9,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  Auto skip ads + Video info + Custom UI + theme + opacity + compact mode + auto update (v15.3)
+// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v16.0)
 // ==/UserScript==
 
 (function () {
@@ -29,6 +29,8 @@ const settings = GM_getValue("settings", {
     showVideoInfo: true,
     posX: 60,
     posY: 60,
+    panelWidth: 260,
+    panelHeight: 200,
     hotkeys: {},
     theme: "auto",
     opacity: 1.0,
@@ -44,7 +46,7 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "15.3";
+const CURRENT_VERSION = "16.0";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -389,51 +391,62 @@ panel.innerHTML = `
 </div>
 
 <div id="settings" style="display:none">
-    <label><input type="checkbox" id="autoShow"> Auto hiện</label>
-    <label><input type="checkbox" id="autoVideo"> Chỉ khi có video</label>
+    <div class="section">
+        <span>🎮 Tính năng</span>
+        <div class="settings-grid">
+            <label><input type="checkbox" id="autoShow"> Auto hiện</label>
+            <label><input type="checkbox" id="autoVideo"> Chỉ khi có video</label>
+            <label><input type="checkbox" id="autoLoop"> 🔁 Loop</label>
+            <label><input type="checkbox" id="autoResume"> ⏯️ Resume</label>
+            <label><input type="checkbox" id="showVideoInfo"> 📺 Info</label>
+            <label><input type="checkbox" id="autoSkipAd"> ⏭️ Skip Ad</label>
+        </div>
+    </div>
 
-    <hr>
-    <strong>🎮 Tính năng</strong>
-    <div class="feat-grid">
-        <label><input type="checkbox" id="autoLoop"> 🔁 Loop</label>
-        <label><input type="checkbox" id="autoResume"> ⏯️ Resume</label>
-        <label><input type="checkbox" id="showVideoInfo"> 📺 Info</label>
-        <label><input type="checkbox" id="autoSkipAd"> ⏭️ Skip Ad</label>
+    <div class="section">
+        <span>🎨 Giao diện</span>
+        <div class="settings-grid">
+            <label><input type="checkbox" id="customUI"> Custom UI</label>
+            <label><input type="checkbox" id="removeShorts"> Ẩn Shorts</label>
+            <label><input type="checkbox" id="removeSidebar"> Ẩn Sidebar</label>
+            <label><input type="checkbox" id="autoNotify"> 📢 Update</label>
+        </div>
+    </div>
+
+    <div class="section">
+        <span>📏 Kích thước & Vị trí</span>
+        <div class="size-pos-grid">
+            <div class="row">Rộng: <input type="number" id="panelWidth" min="150" max="500" value="260" style="width:50px;"> px</div>
+            <div class="row">Cao: <input type="number" id="panelHeight" min="80" max="800" value="200" style="width:50px;"> px</div>
+            <label class="auto-fill"><input type="checkbox" id="autoFill"> Auto-fill</label>
+        </div>
+        <div class="row">X: <input type="number" id="posX" value="${settings.posX}" style="width:50px;">
+            Y: <input type="number" id="posY" value="${settings.posY}" style="width:50px;"></div>
     </div>
 
     <hr>
-    <strong>🎨 Custom UI</strong>
-    <div class="feat-grid">
-        <label><input type="checkbox" id="customUI"> Bật UI</label>
-        <label><input type="checkbox" id="removeShorts"> Ẩn Shorts</label>
-        <label><input type="checkbox" id="removeSidebar"> Ẩn Sidebar</label>
+    <div class="section">
+        <span>🎛️ Hiệu ứng</span>
+        <div class="row">Độ mờ: <input type="range" id="opacitySlider" min="0.3" max="1" step="0.1" value="${settings.opacity}"> <span id="opacityValue">${Math.round(settings.opacity*100)}%</span></div>
+        <div class="row">Màu: <input type="color" id="color" value="${settings.color}"></div>
+        <div class="row">Wallpaper: <input id="wall" type="text" placeholder="URL" value="${settings.wallpaper}"></div>
     </div>
 
     <hr>
-    <div class="row">🎨 Độ mờ: <input type="range" id="opacitySlider" min="0.3" max="1" step="0.1" value="${settings.opacity}"> <span id="opacityValue">${Math.round(settings.opacity*100)}%</span></div>
+    <div class="section">
+        <span>🔄 Cập nhật</span>
+        <div class="row">Check: <select id="updateInterval">
+            <option value="1">1h</option>
+            <option value="6">6h</option>
+            <option value="12">12h</option>
+            <option value="24">24h</option>
+            <option value="48">48h</option>
+        </select>
+        Ẩn sau: <input type="number" id="notifyDuration" min="0" max="60" value="${settings.notificationDuration}" style="width:40px;">s</div>
+    </div>
 
-    <br>
-    Wallpaper:
-    <input id="wall" type="text" placeholder="URL hình nền">
-    <button id="applyWall">OK</button>
-
-    <br><br>
-    Màu:
-    <input type="color" id="color">
-
-    <br><br>
-    <div class="row">🔄 Check update: <select id="updateInterval">
-        <option value="1">1 giờ</option>
-        <option value="6">6 giờ</option>
-        <option value="12">12 giờ</option>
-        <option value="24">24 giờ</option>
-        <option value="48">48 giờ</option>
-    </select></div>
-    <label><input type="checkbox" id="autoNotify"> Hiện thông báo update</label>
-    <div class="row">⏱️ Tự ẩn sau: <input type="number" id="notifyDuration" min="0" max="60" step="1" value="${settings.notificationDuration}" style="width:50px;"> giây</div>
-
-    <br><br>
-    Hotkey:
+    <hr>
+    <span>⌨️ Hotkey</span>
     <div id="hotkeys"></div>
 </div>
 `;
@@ -485,9 +498,10 @@ GM_addStyle(`
 
 #panel{
     position:fixed;
-    top:${clamp(settings.posY, 0, window.innerHeight - 120)}px;
-    left:${clamp(settings.posX, 0, window.innerWidth - 260)}px;
-    width:260px;
+    top:${clamp(parseInt(settings.posY) || 60, 0, window.innerHeight - 120)}px;
+    left:${clamp(parseInt(settings.posX) || 60, 0, window.innerWidth - 260)}px;
+    width:${settings.panelWidth || 260}px;
+    min-height:${settings.panelHeight || 200}px;
     padding:6px;
     background:var(--panel-bg);
     color:var(--panel-text);
@@ -502,8 +516,14 @@ GM_addStyle(`
 
 #header{display:flex;gap:3px;cursor:move;}
 #settings{overflow-x:hidden;max-width:100%;}
+#settings .section{margin-bottom:8px;}
+#settings .section > span{display:block;font-size:11px;font-weight:bold;color:var(--panel-text);margin-bottom:4px;opacity:0.8;}
+.size-pos-grid{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.size-pos-grid .auto-fill{display:flex;align-items:center;gap:4px;}
+
 .row{display:flex;gap:5px;margin:4px 0;align-items:center;flex-wrap:wrap;}
-.row input{width:80px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--panel-text);}
+.row input[type="number"]{width:50px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--panel-text);}
+.row input[type="text"]{flex:1;min-width:60px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--panel-text);}
 .row span{font-size:12px;}
 button{
     font-size:11px;
@@ -549,19 +569,6 @@ input[type="text"]{
     gap:4px;
     font-size:12px;
     color:var(--panel-text);
-    margin:3px 0;
-    white-space:nowrap;
-}
-#settings input[type="checkbox"]{
-    width:14px;
-    height:14px;
-    accent-color:var(--panel-text);
-}
-#settings strong{
-    display:block;
-    margin:8px 0 4px 0;
-    font-size:12px;
-    color:var(--panel-text);
 }
 #settings hr{
     border:none;
@@ -576,13 +583,24 @@ input[type="text"]{
     color:var(--panel-text);
     font-size:11px;
 }
-#settings .feat-grid{
-    display:flex;
-    flex-wrap:wrap;
-    gap:8px;
+#settings .settings-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap:6px;
 }
-#settings .feat-grid label{
-    flex:0 0 auto;
+#settings .settings-grid label{
+    display:flex;
+    align-items:center;
+    gap:4px;
+    font-size:11px;
+    padding:4px 6px;
+    background:var(--btn-bg);
+    border-radius:4px;
+    cursor:pointer;
+    white-space:nowrap;
+}
+#settings .settings-grid label:hover{
+    background:var(--btn-hover);
 }
 
 /* Highlight volume input when boosted (>1) */
@@ -870,6 +888,22 @@ function applyCustomUI() {
 
     customStyles.innerHTML = css;
     console.log("Custom UI applied");
+}
+
+// ===== VIDEO EVENT HANDLERS =====
+function onVideoReady() {
+    console.log("Video ready, applying settings...");
+    applyVideo();
+    
+    // Also apply loop setting
+    const v = getVideo();
+    if (v) {
+        v.loop = settings.autoLoop;
+    }
+}
+
+function onVideoError(e) {
+    console.warn("Video error:", e);
 }
 
 // ===== VIDEO INFO PANEL STYLES =====
@@ -1175,12 +1209,10 @@ if (removeSidebarCheckbox) {
 const wallInput = panel.querySelector("#wall");
 wallInput.value = settings.wallpaper || "";
 
-panel.querySelector("#applyWall").onclick = () => {
+wallInput.onchange = () => {
     settings.wallpaper = wallInput.value.trim();
     GM_setValue("settings", settings);
     applyWallpaper();
-    // FIX: Thêm logging để debug
-    console.log("Wallpaper applied:", settings.wallpaper);
 };
 
 // ===== COLOR =====
@@ -1194,8 +1226,68 @@ colorInput.oninput = () => {
 
 colorInput.onchange = () => {
     GM_setValue("settings", settings);
-    // FIX: Thêm logging để debug
     console.log("Color changed:", settings.color);
+};
+
+// ===== PANEL SIZE & POSITION =====
+const panelWidthInput = document.getElementById("panelWidth");
+const panelHeightInput = document.getElementById("panelHeight");
+const autoFillCheckbox = document.getElementById("autoFill");
+const posXInput = document.getElementById("posX");
+const posYInput = document.getElementById("posY");
+
+panelWidthInput.value = parseInt(panel.style.width) || 260;
+panelHeightInput.value = parseInt(panel.style.height) || 200;
+posXInput.value = settings.posX || 60;
+posYInput.value = settings.posY || 60;
+
+panelWidthInput.onchange = () => {
+    const w = parseInt(panelWidthInput.value) || 260;
+    panel.style.width = w + "px";
+    console.log("Panel width:", w);
+};
+
+panelHeightInput.onchange = () => {
+    const h = parseInt(panelHeightInput.value) || 200;
+    panel.style.height = h + "px";
+    console.log("Panel height:", h);
+};
+
+autoFillCheckbox.onchange = () => {
+    if (autoFillCheckbox.checked) {
+        panel.style.width = "100%";
+        panel.style.height = "auto";
+        panel.style.maxWidth = "none";
+        panel.style.maxHeight = "none";
+        panel.style.top = "10px";
+        panel.style.left = "10px";
+        panel.style.right = "10px";
+    } else {
+        panel.style.width = panelWidthInput.value + "px";
+        panel.style.height = panelHeightInput.value + "px";
+        panel.style.top = (posYInput.value || 60) + "px";
+        panel.style.left = (posXInput.value || 60) + "px";
+        panel.style.right = "auto";
+        panel.style.maxWidth = "none";
+        panel.style.maxHeight = "none";
+    }
+    console.log("Auto-fill:", autoFillCheckbox.checked);
+};
+
+posXInput.onchange = () => {
+    settings.posX = parseInt(posXInput.value) || 60;
+    if (!autoFillCheckbox.checked) {
+        panel.style.left = settings.posX + "px";
+    }
+    GM_setValue("settings", settings);
+};
+
+posYInput.onchange = () => {
+    settings.posY = parseInt(posYInput.value) || 60;
+    if (!autoFillCheckbox.checked) {
+        panel.style.top = settings.posY + "px";
+    }
+    GM_setValue("settings", settings);
 };
 
 // ===== THEME TOGGLE =====
@@ -1581,6 +1673,9 @@ document.addEventListener("mousemove", e => {
         const newTop = clamp(e.clientY - offsetY, 0, window.innerHeight - 120);
         panel.style.left = newLeft + "px";
         panel.style.top = newTop + "px";
+        // Update position inputs
+        if (posXInput) posXInput.value = newLeft;
+        if (posYInput) posYInput.value = newTop;
         raf = null;
     });
 });
@@ -1589,8 +1684,9 @@ document.addEventListener("mouseup", () => {
     if(isDragging){
         settings.posX = panel.offsetLeft;
         settings.posY = panel.offsetTop;
+        settings.panelWidth = parseInt(panel.style.width) || 260;
+        settings.panelHeight = parseInt(panel.style.height) || 200;
         GM_setValue("settings", settings);
-        // FIX: Thêm logging để debug
         console.log("Panel position saved:", settings.posX, settings.posY);
     }
     isDragging = false;
@@ -1601,15 +1697,12 @@ panel.querySelector("#lock").onclick = function(){
     isLocked = !isLocked;
     this.textContent = isLocked ? "🔒" : "🔓";
     header.style.cursor = isLocked ? "default" : "move";
-    // FIX: Thêm logging để debug
     console.log("Panel locked:", isLocked);
 };
 
-// ===== MIN =====
 panel.querySelector("#min").onclick = () => {
     control.style.display =
         control.style.display === "none" ? "block" : "none";
-    // FIX: Thêm logging để debug
     console.log("Panel minimized:", control.style.display === "none");
 };
 
@@ -1674,56 +1767,7 @@ function detectVideoOnce(){
     }
 }
 
-function onVideoReady(){
-    // Video đã sẵn sàng, apply settings ngay
-    // FIX: Thêm logging để debug
-    console.log("Video ready, applying settings...");
-    applyVideo();
-}
-
-function onVideoError(e){
-    console.warn("Video error detected:", e);
-    // Không crash, chỉ log
-    // FIX: Thêm error handling chi tiết hơn
-    const video = e.target;
-    if(video && video.error){
-        const error = video.error;
-        switch(error.code){
-            case MediaError.MEDIA_ERR_ABORTED:
-                console.warn("Video playback was aborted");
-                break;
-            case MediaError.MEDIA_ERR_NETWORK:
-                console.warn("Network error while loading video");
-                break;
-            case MediaError.MEDIA_ERR_DECODE:
-                console.warn("Video decoding error");
-                break;
-            case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                console.warn("Video source not supported");
-                break;
-            default:
-                console.warn("Unknown video error");
-        }
-    }
-    // FIX: Thêm logging để debug
-    console.log("Video error details:", video ? video.error : "No video element");
-}
-
 function initVideoDetection(){
-    // Initial detection on load
-    if(document.readyState === "complete"){
-        detectVideoOnce();
-    } else {
-        window.addEventListener("load", detectVideoOnce);
-    }
-
-    // FIX: Thêm visibility change để detect khi tab active
-    document.addEventListener("visibilitychange", () => {
-        if(!document.hidden){
-            detectVideoOnce();
-        }
-    });
-
     // FIX: Thêm play event
     document.addEventListener("play", e => {
         if(e.target.tagName === "VIDEO"){
@@ -1775,25 +1819,15 @@ function initVideoDetection(){
                     }
                 }
             }
-            // Check removed nodes
-            if(mut.removedNodes.length > 0){
-                for(const node of mut.removedNodes){
-                    if(node.nodeName === "VIDEO" || 
-                       (node.querySelector && node.querySelector("video"))){
-                        // Video bị remove, check lại
-                        shouldCheck = true;
-                        break;
-                    }
-                }
-            }
-            // Check attribute changes on video elements
-            if(mut.type === 'attributes' && mut.target.nodeName === 'VIDEO'){
+            // Check attribute changes
+            if(mut.type === "attributes" && mut.attributeName === "src"){
                 shouldCheck = true;
             }
             if(shouldCheck) break;
         }
+        
         if(shouldCheck){
-            detectVideoOnce();
+            requestAnimationFrame(detectVideoOnce);
         }
     });
 
@@ -1823,6 +1857,14 @@ function initEventListeners(){
         panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 120) + "px";
         // FIX: Thêm logging để debug
         console.log("Window resized, panel position adjusted");
+    });
+    
+    // Cleanup khi page unload
+    window.addEventListener("unload", () => {
+        if(observer) observer.disconnect();
+        if(lastVideo) cleanupAudioContext(lastVideo);
+        if(videoInfoInterval) clearInterval(videoInfoInterval);
+        console.log("Cleanup completed on page unload");
     });
 }
 
