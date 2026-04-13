@@ -150,7 +150,14 @@ panel.innerHTML = `
     </div>
 `;
 
-document.body.appendChild(panel);
+// ===== INIT =====
+function init(){
+    if(!document.body){
+        requestAnimationFrame(init);
+        return;
+    }
+    document.body.appendChild(panel);
+}
 
 // ===== STYLE =====
 GM_addStyle(`
@@ -401,6 +408,8 @@ function checkForUpdates() {
 }
 
 function showUpdateNotification(newVersion) {
+    if(!document.body) return;
+    
     const notification = document.createElement("div");
     notification.innerHTML = `
         <div style="position:fixed; top:20px; right:20px; background:#4CAF50; color:white; 
@@ -430,6 +439,15 @@ function showUpdateNotification(newVersion) {
 setTimeout(checkForUpdates, 3000);
 
 // ===== START =====
+function init(){
+    if(!document.body){
+        requestAnimationFrame(init);
+        return;
+    }
+    document.body.appendChild(panel);
+}
+
+init();
 initDetection();
 
 })();
