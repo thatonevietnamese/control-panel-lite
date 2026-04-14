@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      1.16.5
+// @version      1.16.6
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -47,7 +47,7 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "1.16.5";
+const CURRENT_VERSION = "1.16.6";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -1739,7 +1739,11 @@ function detectVideoOnce(){
     lastDetectionTime = now;
     
     const v = getVideo();
-    if(v !== lastVideo){
+    const videoSrc = v ? (v.src || v.currentSrc || '') : '';
+    const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
+    
+    // Detect new video or src change (e.g., after skip ad)
+    if(v !== lastVideo || videoSrc !== lastSrc){
         if(lastVideo){
             lastVideo.removeEventListener('canplay', onVideoReady);
             lastVideo.removeEventListener('loadedmetadata', onVideoReady);
