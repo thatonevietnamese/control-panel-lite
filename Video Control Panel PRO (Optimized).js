@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      16.1
+// @version      16.1.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -9,7 +9,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v16.0)
+// @grant        GM_info
+// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v16.1.1 - Fixed)
 // ==/UserScript==
 
 (function () {
@@ -46,12 +47,11 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "16.0";
+const CURRENT_VERSION = "16.1.1";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
     const now = Date.now();
-    // Chỉ check update theo interval đã設定
     const intervalMs = (settings.updateCheckInterval || 24) * 60 * 60 * 1000;
     if(now - settings.lastUpdateCheck < intervalMs){
         return;
@@ -69,7 +69,6 @@ function checkForUpdates(){
                         if(remoteVersion !== CURRENT_VERSION){
                             settings.updateAvailable = true;
                             console.log("Update available:", remoteVersion);
-                            // Hiển thị thông báo update
                             showUpdateNotification(remoteVersion);
                         } else {
                             settings.updateAvailable = false;
@@ -89,13 +88,13 @@ function checkForUpdates(){
 }
 
 function showUpdateNotification(newVersion){
-    // Kiểm tra xem có nên hiện notification không
     if(!settings.autoShowNotification){
         console.log("Update available:", newVersion, "(notification disabled)");
         return;
     }
     
-    // Tạo notification element
+    if(document.getElementById("update-notification")) return;
+    
     const notification = document.createElement("div");
     notification.id = "update-notification";
     notification.innerHTML = `
@@ -107,7 +106,6 @@ function showUpdateNotification(newVersion){
     `;
     document.body.appendChild(notification);
     
-    // Tự động remove theo settings (0 = never)
     const duration = settings.notificationDuration || 10;
     if(duration > 0){
         setTimeout(() => {
@@ -120,7 +118,6 @@ function showUpdateNotification(newVersion){
 
 // ===== CONFLICT CHECK =====
 function checkConflict() {
-    // PRO uses id="panel", LITE uses id="vcp-panel"
     const proPanel = document.getElementById("panel");
     const litePanel = document.getElementById("vcp-panel");
     
@@ -130,14 +127,13 @@ function checkConflict() {
 }
 
 function showConflictNotification() {
-    // Only show once
     if (document.getElementById("conflict-notification")) return;
     
     const notification = document.createElement("div");
     notification.id = "conflict-notification";
     notification.innerHTML = `
         <div style="position:fixed; top:20px; right:20px; background:#f44336; color:white; padding:12px 20px; border-radius:8px; z-index:10002; box-shadow:0 4px 12px rgba(0,0,0,0.3); font-family:Tahoma; font-size:12px; animation:slideIn 0.3s ease;">
-            ⚠️ Xung đột! Cả PRO và LITE đang bật. Vui lòng tắt một phiên bản.
+            ⚠️ Conflict! PRO and LITE both running. Please disable one.
             <button onclick="this.parentElement.remove();" style="margin-left:10px; background:white; color:#f44336; border:none; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px;">OK</button>
         </div>
     `;
@@ -157,77 +153,92 @@ let raf = null;
 let observer = null;
 let isApplying = false;
 let videoInfoInterval = null;
+let audioContextSupported = true;
 
-// ===== AUTO RESUME STATE =====
 window.autoResumeEnabled = () => settings.autoResume;
 
 // ===== AUDIO BOOST =====
-// Cache audio contexts và gain nodes cho từng video
 const audioContexts = new WeakMap();
 
-// FIX: Cleanup audio context khi video bị remove
 function cleanupAudioContext(video){
     if(audioContexts.has(video)){
         const audioData = audioContexts.get(video);
         try {
             if(audioData.ctx && audioData.ctx.state !== 'closed'){
-                audioData.ctx.close();
+                audioData.ctx.close().catch(() => {});
             }
         } catch(e) {
             console.warn("Error closing AudioContext:", e);
         }
         audioContexts.delete(video);
-        // FIX: Thêm logging để debug
         console.log("Audio context cleaned up for video");
     }
 }
 
 function getOrCreateGainNode(video){
+    if(!audioContextSupported) return null;
+    
+    if(!video.src && !video.currentSrc){
+        return null;
+    }
+    
     if(audioContexts.has(video)){
         const audioData = audioContexts.get(video);
-        // FIX: Resume AudioContext nếu bị suspended
         if(audioData.ctx.state === 'suspended'){
-            audioData.ctx.resume().catch(e => {
-                console.warn("Failed to resume AudioContext:", e);
-            });
+            audioData.ctx.resume().catch(() => {});
         }
         return audioData;
     }
     
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioCtx.createMediaElementSource(video);
-        const gainNode = audioCtx.createGain();
+        let source;
         
-        source.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        
-        const audioData = { ctx: audioCtx, gain: gainNode };
-        audioContexts.set(video, audioData);
-        
-        // FIX: Resume AudioContext ngay sau khi tạo
-        if(audioCtx.state === 'suspended'){
-            audioCtx.resume().catch(e => {
-                console.warn("Failed to resume AudioContext:", e);
-            });
+        try {
+            source = audioCtx.createMediaElementSource(video);
+        } catch(sourceError){
+            console.log("MediaElementSource already connected:", sourceError.message);
+            if(audioCtx.state === 'suspended'){
+                audioCtx.resume().catch(() => {});
+            }
+            const data = { ctx: audioCtx, gain: audioCtx.createGain(), sourceConnected: false };
+            audioContexts.set(video, data);
+            return data;
         }
         
-        // FIX: Thêm logging để debug
-        console.log("Audio boost initialized for video");
+        const gainNode = audioCtx.createGain();
         
-        return audioData;
+        try {
+            source.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+        } catch(connectError){
+            console.warn("Audio connection failed:", connectError.message);
+            return null;
+        }
+        
+        const data = { ctx: audioCtx, gain: gainNode, sourceConnected: true };
+        audioContexts.set(video, data);
+        
+        if(audioCtx.state === 'suspended'){
+            audioCtx.resume().catch(() => {});
+        }
+        
+        console.log("Audio boost initialized for video");
+        return data;
     } catch(e) {
-        console.warn("Audio boost not available:", e);
+        console.warn("Audio boost not available:", e.message);
+        audioContextSupported = false;
         return null;
     }
 }
 
-// FIX: Thêm function để smooth gain transition
 function smoothGainTransition(gainNode, targetValue, duration = 0.1){
     if(!gainNode) return;
-    const currentTime = gainNode.context.currentTime;
-    gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
-    gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
+    try {
+        const currentTime = gainNode.context.currentTime;
+        gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+        gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
+    } catch(e) {}
 }
 
 // ===== HELPERS =====
@@ -242,19 +253,16 @@ function clamp(val, min, max){
 function getVideo(){
     try {
         const videos = document.querySelectorAll("video");
-        // FIX: Ưu tiên video đang phát
         for (const v of videos) {
             if (v.offsetParent !== null && !v.paused && v.duration > 0) {
                 return v;
             }
         }
-        // Fallback: video có duration > 0
         for (const v of videos) {
             if (v.offsetParent !== null && v.duration > 0) {
                 return v;
             }
         }
-        // Fallback: return first visible video
         for (const v of videos) {
             if (v.offsetParent !== null) {
                 return v;
@@ -266,7 +274,6 @@ function getVideo(){
     return null;
 }
 
-// FIX: Thêm function để check video visibility
 function isVideoVisible(video){
     if(!video) return false;
     const rect = video.getBoundingClientRect();
@@ -281,7 +288,6 @@ function isVideoVisible(video){
 }
 
 function applyVideo(){
-    // FIX: Prevent multiple simultaneous calls
     if(isApplying) return;
     isApplying = true;
     
@@ -293,16 +299,13 @@ function applyVideo(){
         }
 
         const speed = clamp(settings.speed, 0.1, 16);
-        const volume = clamp(settings.volume, 0, 5); // Allow boost up to 5x
+        const volume = clamp(settings.volume, 0, 5);
 
-        // FIX: Smooth speed transition
         if(lastApplied.speed !== speed){
-            // Sử dụng requestAnimationFrame để smooth transition
             requestAnimationFrame(() => {
                 v.playbackRate = speed;
             });
             lastApplied.speed = speed;
-            // FIX: Thêm logging để debug
             console.log("Speed applied:", speed);
         }
 
@@ -310,32 +313,24 @@ function applyVideo(){
             const audioData = getOrCreateGainNode(v);
             
             if(volume <= 1){
-                // Normal volume: dùng video.volume, gain = 1
-                // FIX: Smooth volume transition
                 requestAnimationFrame(() => {
                     v.volume = volume;
                 });
                 if(audioData && audioData.gain) {
-                    // FIX: Smooth gain transition
                     smoothGainTransition(audioData.gain, 1);
                 }
             } else {
-                // Boost volume: set video.volume = 1, gain = volume
-                // FIX: Nếu audio boost không khả dụng, vẫn set video.volume = 1
                 requestAnimationFrame(() => {
                     v.volume = 1;
                 });
                 if(audioData && audioData.gain) {
-                    // FIX: Smooth gain transition
                     smoothGainTransition(audioData.gain, volume);
                 } else {
-                    // Fallback: nếu không có audio boost, chỉ set volume = 1
                     console.warn("Audio boost not available, volume limited to 1x");
                 }
             }
             
             lastApplied.volume = volume;
-            // FIX: Thêm logging để debug
             console.log("Volume applied:", volume, "Audio boost:", volume > 1 ? "Yes" : "No");
         }
     } catch(e) {
@@ -358,7 +353,6 @@ function applyWallpaper(){
         return;
     }
 
-    // FIX: Escape wallpaper URL để tránh XSS và lỗi CSS
     const escapedWallpaper = settings.wallpaper.replace(/"/g, '\\"').replace(/'/g, "\\'");
     style.innerHTML = `
         body, ytd-app {
@@ -366,7 +360,6 @@ function applyWallpaper(){
             background-size: cover !important;
         }
     `;
-    // FIX: Thêm logging để debug
     console.log("Wallpaper applied:", settings.wallpaper);
 }
 
@@ -460,7 +453,6 @@ function applyTheme(theme) {
     } else {
         html.setAttribute("data-theme", theme);
     }
-    // FIX: Thêm logging để debug
     console.log("Theme applied:", theme);
 }
 
@@ -562,7 +554,6 @@ input[type="text"]{
     color:var(--panel-text);
 }
 
-/* Labels and checkboxes */
 #settings label{
     display:inline-flex;
     align-items:center;
@@ -603,14 +594,12 @@ input[type="text"]{
     background:var(--btn-hover);
 }
 
-/* Highlight volume input when boosted (>1) */
 #volume.booster{
     border-color: #ff9800;
     background: linear-gradient(90deg, #fff3e0 0%, #ffe0b2 100%);
     font-weight: bold;
 }
 
-/* Theme toggle button */
 #themeToggle{
     width:28px;
     height:28px;
@@ -620,7 +609,6 @@ input[type="text"]{
     font-size:14px;
 }
 
-/* Opacity slider */
 #opacitySlider{
     width:100px;
     height:4px;
@@ -638,13 +626,11 @@ input[type="text"]{
     cursor:pointer;
 }
 
-/* Compact mode */
 .compact-mode .row span{display:none;}
 .compact-mode .row input[type="number"]{width:60px;}
 .compact-mode #settings{display:none !important;}
 .compact-mode #compactMode{transform:scale(0.8);margin:0;}
 
-/* Tooltips */
 [data-tooltip]{position:relative;}
 [data-tooltip]:hover::after{
     content:attr(data-tooltip);
@@ -662,7 +648,6 @@ input[type="text"]{
     margin-bottom:4px;
 }
 
-/* Animations */
 @keyframes fadeIn{
     from{opacity:0;transform:translateY(-10px);}
     to{opacity:1;transform:translateY(0);}
@@ -676,7 +661,7 @@ input[type="text"]{
     to{opacity:1;transform:translateX(0);}
 }
 #panel{animation:fadeIn 0.3s ease;}
-}`);
+`);
 
 // ===== VIDEO INFO DISPLAY =====
 let videoInfoElement = null;
@@ -776,7 +761,6 @@ function escapeHtml(text) {
 function skipAd() {
     if (!settings.autoSkipAd) return;
 
-    // Skip button trên overlay quảng cáo
     const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, [class*="skip-button"], .videoAdSkipButton');
     if (skipBtn) {
         console.log("Skipping ad...");
@@ -784,17 +768,14 @@ function skipAd() {
         return;
     }
 
-    // Skip overlay quảng cáo
     const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
     if (adOverlay) {
         adOverlay.click();
         return;
     }
 
-    // Check for "Ad playing" indicator
     const adIndicator = document.querySelector('.ytp-ad-text, .ad-showing');
     if (adIndicator) {
-        // Try to find skip button in various locations
         const possibleSkip = document.querySelector('.ytp-ad-skip-button, [data-ad-skip]');
         if (possibleSkip) {
             possibleSkip.click();
@@ -809,7 +790,6 @@ function forceLoop() {
     const v = getVideo();
     if (!v) return;
 
-    // Force loop by checking if video ended and restarting
     if (v.ended || (v.currentTime >= v.duration - 0.5 && v.duration > 0)) {
         console.log("Force looping video...");
         v.currentTime = 0;
@@ -833,7 +813,6 @@ function applyCustomUI() {
 
     let css = "";
 
-    // Remove Shorts
     if (settings.removeShorts) {
         css += `
             ytd-rich-item-renderer[is-shorts], 
@@ -846,7 +825,6 @@ function applyCustomUI() {
         `;
     }
 
-    // Remove Sidebar
     if (settings.removeSidebar) {
         css += `
             #secondary, 
@@ -856,9 +834,7 @@ function applyCustomUI() {
         `;
     }
 
-    // Custom YouTube styling
     css += `
-        /* Custom dark theme */
         .dark-theme-custom {
             --yt-spec-brand-background-primary: #0f0f0f !important;
             --yt-spec-app-background: #0f0f0f !important;
@@ -866,22 +842,17 @@ function applyCustomUI() {
             --yt-spec-general-background-b: #1a1a1a !important;
         }
         
-        /* Hide promotional banners */
         .ytd-promoted-video-renderer,
         .ytd-banner-promo-renderer { display: none !important; }
         
-        /* Cleaner video player */
         .ytp-chrome-bottom { opacity: 0.8 !important; }
         
-        /* Custom scrollbar */
         ::-webkit-scrollbar { width: 8px !important; }
         ::-webkit-scrollbar-track { background: #1a1a1a !important; }
         ::-webkit-scrollbar-thumb { background: #555 !important; border-radius: 4px !important; }
         
-        /* Remove suggested video overlay */
         .ytp-endscreen-content { display: none !important; }
         
-        /* Darker recommendations */
         ytd-watch-flexy[dark] #secondary-inner,
         ytd-watch-flexy[dark] ytd-reel-shelf-renderer { opacity: 0.9 !important; }
     `;
@@ -895,7 +866,6 @@ function onVideoReady() {
     console.log("Video ready, applying settings...");
     applyVideo();
     
-    // Also apply loop setting
     const v = getVideo();
     if (v) {
         v.loop = settings.autoLoop;
@@ -965,53 +935,33 @@ GM_addStyle(`
 
 // ===== INIT =====
 function init(){
-    // Check if body exists, if not wait
     if(!document.body){
         requestAnimationFrame(init);
         return;
     }
 
     document.body.appendChild(panel);
-    panel.style.display = settings.autoShow ? "block" : "none";
+    panel.style.display = "none";
     applyWallpaper();
     applyTheme(settings.theme);
     initEventListeners();
     initVideoDetection();
     
-    // Initialize video info if enabled
-    if (settings.showVideoInfo) {
-        setTimeout(() => {
-            const v = getVideo();
-            if (v) {
-                videoInfoInterval = setInterval(updateVideoInfo, 1000);
-            }
-        }, 1000);
-    }
-
-    // Initialize custom UI if enabled
-    if (settings.customUI) {
-        setTimeout(applyCustomUI, 1000);
-    }
-    
-    console.log("Video Control Panel PRO initialized");
+    console.log("Video Control Panel PRO v" + CURRENT_VERSION + " initialized");
     addSmoothTransitions();
 }
 
-// ===== SMOOTH TRANSITIONS =====
 function addSmoothTransitions(){
-    // Thêm transition cho tất cả các input elements
     const inputs = panel.querySelectorAll('input[type="number"], input[type="text"], input[type="range"]');
     inputs.forEach(input => {
         input.style.transition = 'all 0.2s ease';
     });
     
-    // Thêm transition cho tất cả các buttons
     const buttons = panel.querySelectorAll('button');
     buttons.forEach(btn => {
         btn.style.transition = 'all 0.2s ease';
     });
     
-    // Thêm transition cho panel
     panel.style.transition = 'opacity 0.2s ease, background 0.3s ease, transform 0.2s ease';
 }
 
@@ -1019,32 +969,28 @@ function addSmoothTransitions(){
 const volumeInput = panel.querySelector("#volume");
 const speedInput = panel.querySelector("#speed");
 
-updateVolumeInput();
-speedInput.value = settings.speed;
-
 function updateVolumeInput(){
     volumeInput.value = settings.volume;
     volumeInput.classList.toggle("booster", settings.volume > 1);
-    // FIX: Thêm logging để debug
     console.log("Volume input updated:", settings.volume);
 }
+
+updateVolumeInput();
+speedInput.value = settings.speed;
 
 volumeInput.onchange = () => {
     settings.volume = clamp(parseFloat(volumeInput.value) || 0, 0, 5);
     GM_setValue("settings", settings);
     updateVolumeInput();
     applyVideo();
-    // FIX: Thêm logging để debug
     console.log("Volume changed:", settings.volume);
 };
 
 let volumeInputTimeout = null;
 volumeInput.oninput = () => {
-    // Live preview with debouncing
     const val = clamp(parseFloat(volumeInput.value) || 0, 0, 5);
     volumeInput.classList.toggle("booster", val > 1);
     
-    // FIX: Debounce để tránh gọi quá频繁
     if(volumeInputTimeout) clearTimeout(volumeInputTimeout);
     volumeInputTimeout = setTimeout(() => {
         applyVideoToVolume(val);
@@ -1055,7 +1001,6 @@ speedInput.onchange = () => {
     settings.speed = clamp(parseFloat(speedInput.value) || 1, 0.1, 16);
     GM_setValue("settings", settings);
     applyVideo();
-    // FIX: Thêm logging để debug
     console.log("Speed changed:", settings.speed);
 };
 
@@ -1066,28 +1011,22 @@ function applyVideoToVolume(vol) {
     const audioData = getOrCreateGainNode(v);
     
     if(vol <= 1){
-        // FIX: Smooth volume transition
         requestAnimationFrame(() => {
             v.volume = vol;
         });
         if(audioData && audioData.gain) {
-            // FIX: Smooth gain transition
             smoothGainTransition(audioData.gain, 1);
         }
     } else {
-        // FIX: Smooth volume transition
         requestAnimationFrame(() => {
             v.volume = 1;
         });
         if(audioData && audioData.gain) {
-            // FIX: Smooth gain transition
             smoothGainTransition(audioData.gain, vol);
         } else {
-            // Fallback: nếu không có audio boost, chỉ set volume = 1
             console.warn("Audio boost not available, volume limited to 1x");
         }
     }
-    // FIX: Thêm logging để debug
     console.log("Volume preview:", vol, "Audio boost:", vol > 1 ? "Yes" : "No");
 }
 
@@ -1105,89 +1044,82 @@ panel.querySelector("#tab2").onclick = () => {
     settingsDiv.style.display = "block";
 };
 
-// ===== AUTO =====
-panel.querySelector("#autoShow").checked = settings.autoShow;
-panel.querySelector("#autoVideo").checked = settings.autoVideo;
-
-panel.querySelector("#autoShow").onchange = e => {
-    settings.autoShow = e.target.checked;
-    GM_setValue("settings", settings);
-    // FIX: Thêm logging để debug
-    console.log("Auto show:", settings.autoShow);
-};
-
-panel.querySelector("#autoVideo").onchange = e => {
-    settings.autoVideo = e.target.checked;
-    GM_setValue("settings", settings);
-    console.log("Auto video:", settings.autoVideo);
-};
-
+// ===== SETTINGS CHECKBOXES =====
+const autoShowCheckbox = document.getElementById("autoShow");
+const autoVideoCheckbox = document.getElementById("autoVideo");
 const autoResumeCheckbox = document.getElementById("autoResume");
-if (autoResumeCheckbox) {
-    autoResumeCheckbox.checked = settings.autoResume !== false;
-    autoResumeCheckbox.onchange = e => {
-        settings.autoResume = e.target.checked;
-        GM_setValue("settings", settings);
-        console.log("Auto resume:", settings.autoResume);
-    };
-}
-
-// ===== VIDEO INFO & CUSTOM UI SETTINGS =====
+const autoLoopCheckbox = document.getElementById("autoLoop");
 const showVideoInfoCheckbox = document.getElementById("showVideoInfo");
 const autoSkipAdCheckbox = document.getElementById("autoSkipAd");
 const customUICheckbox = document.getElementById("customUI");
 const removeShortsCheckbox = document.getElementById("removeShorts");
 const removeSidebarCheckbox = document.getElementById("removeSidebar");
 
-if (showVideoInfoCheckbox) {
-    showVideoInfoCheckbox.checked = settings.showVideoInfo !== false;
-    showVideoInfoCheckbox.onchange = e => {
-        settings.showVideoInfo = e.target.checked;
+if(autoShowCheckbox){
+    autoShowCheckbox.checked = settings.autoShow !== false;
+    autoShowCheckbox.onchange = e => {
+        settings.autoShow = e.target.checked;
         GM_setValue("settings", settings);
-        if (!settings.showVideoInfo && videoInfoElement) {
-            videoInfoElement.remove();
-            videoInfoElement = null;
-        }
-        console.log("Show video info:", settings.showVideoInfo);
     };
 }
 
-if (autoSkipAdCheckbox) {
-    autoSkipAdCheckbox.checked = settings.autoSkipAd !== false;
-    autoSkipAdCheckbox.onchange = e => {
-        settings.autoSkipAd = e.target.checked;
+if(autoVideoCheckbox){
+    autoVideoCheckbox.checked = settings.autoVideo !== false;
+    autoVideoCheckbox.onchange = e => {
+        settings.autoVideo = e.target.checked;
         GM_setValue("settings", settings);
-        console.log("Auto skip ad:", settings.autoSkipAd);
     };
 }
 
-const autoLoopCheckbox = document.getElementById("autoLoop");
-if (autoLoopCheckbox) {
+if(autoResumeCheckbox){
+    autoResumeCheckbox.checked = settings.autoResume !== false;
+    autoResumeCheckbox.onchange = e => {
+        settings.autoResume = e.target.checked;
+        GM_setValue("settings", settings);
+    };
+}
+
+if(autoLoopCheckbox){
     autoLoopCheckbox.checked = settings.autoLoop !== false;
     autoLoopCheckbox.onchange = e => {
         settings.autoLoop = e.target.checked;
         GM_setValue("settings", settings);
-        
-        // Apply loop immediately to current video
         const v = getVideo();
-        if (v) {
-            v.loop = settings.autoLoop;
-        }
+        if(v) v.loop = settings.autoLoop;
         console.log("Auto loop:", settings.autoLoop);
     };
 }
 
-if (customUICheckbox) {
+if(showVideoInfoCheckbox){
+    showVideoInfoCheckbox.checked = settings.showVideoInfo !== false;
+    showVideoInfoCheckbox.onchange = e => {
+        settings.showVideoInfo = e.target.checked;
+        GM_setValue("settings", settings);
+        if(!settings.showVideoInfo && videoInfoElement){
+            videoInfoElement.remove();
+            videoInfoElement = null;
+        }
+    };
+}
+
+if(autoSkipAdCheckbox){
+    autoSkipAdCheckbox.checked = settings.autoSkipAd !== false;
+    autoSkipAdCheckbox.onchange = e => {
+        settings.autoSkipAd = e.target.checked;
+        GM_setValue("settings", settings);
+    };
+}
+
+if(customUICheckbox){
     customUICheckbox.checked = settings.customUI || false;
     customUICheckbox.onchange = e => {
         settings.customUI = e.target.checked;
         GM_setValue("settings", settings);
         applyCustomUI();
-        console.log("Custom UI:", settings.customUI);
     };
 }
 
-if (removeShortsCheckbox) {
+if(removeShortsCheckbox){
     removeShortsCheckbox.checked = settings.removeShorts || false;
     removeShortsCheckbox.onchange = e => {
         settings.removeShorts = e.target.checked;
@@ -1196,7 +1128,7 @@ if (removeShortsCheckbox) {
     };
 }
 
-if (removeSidebarCheckbox) {
+if(removeSidebarCheckbox){
     removeSidebarCheckbox.checked = settings.removeSidebar || false;
     removeSidebarCheckbox.onchange = e => {
         settings.removeSidebar = e.target.checked;
@@ -1207,27 +1139,27 @@ if (removeSidebarCheckbox) {
 
 // ===== WALL =====
 const wallInput = panel.querySelector("#wall");
-wallInput.value = settings.wallpaper || "";
-
-wallInput.onchange = () => {
-    settings.wallpaper = wallInput.value.trim();
-    GM_setValue("settings", settings);
-    applyWallpaper();
-};
+if(wallInput){
+    wallInput.value = settings.wallpaper || "";
+    wallInput.onchange = () => {
+        settings.wallpaper = wallInput.value.trim();
+        GM_setValue("settings", settings);
+        applyWallpaper();
+    };
+}
 
 // ===== COLOR =====
 const colorInput = panel.querySelector("#color");
-colorInput.value = settings.color;
-
-colorInput.oninput = () => {
-    settings.color = colorInput.value;
-    document.documentElement.style.setProperty("--panel-bg", settings.color);
-};
-
-colorInput.onchange = () => {
-    GM_setValue("settings", settings);
-    console.log("Color changed:", settings.color);
-};
+if(colorInput){
+    colorInput.value = settings.color;
+    colorInput.oninput = () => {
+        settings.color = colorInput.value;
+        document.documentElement.style.setProperty("--panel-bg", settings.color);
+    };
+    colorInput.onchange = () => {
+        GM_setValue("settings", settings);
+    };
+}
 
 // ===== PANEL SIZE & POSITION =====
 const panelWidthInput = document.getElementById("panelWidth");
@@ -1236,90 +1168,85 @@ const autoFillCheckbox = document.getElementById("autoFill");
 const posXInput = document.getElementById("posX");
 const posYInput = document.getElementById("posY");
 
-panelWidthInput.value = parseInt(panel.style.width) || 260;
-panelHeightInput.value = parseInt(panel.style.height) || 200;
-posXInput.value = settings.posX || 60;
-posYInput.value = settings.posY || 60;
+if(panelWidthInput && panelHeightInput && posXInput && posYInput){
+    panelWidthInput.value = parseInt(panel.style.width) || 260;
+    panelHeightInput.value = parseInt(panel.style.height) || 200;
+    posXInput.value = settings.posX || 60;
+    posYInput.value = settings.posY || 60;
 
-panelWidthInput.onchange = () => {
-    const w = parseInt(panelWidthInput.value) || 260;
-    panel.style.width = w + "px";
-    console.log("Panel width:", w);
-};
+    panelWidthInput.onchange = () => {
+        const w = parseInt(panelWidthInput.value) || 260;
+        panel.style.width = w + "px";
+    };
 
-panelHeightInput.onchange = () => {
-    const h = parseInt(panelHeightInput.value) || 200;
-    panel.style.height = h + "px";
-    console.log("Panel height:", h);
-};
+    panelHeightInput.onchange = () => {
+        const h = parseInt(panelHeightInput.value) || 200;
+        panel.style.height = h + "px";
+    };
 
-autoFillCheckbox.onchange = () => {
-    if (autoFillCheckbox.checked) {
-        panel.style.width = "100%";
-        panel.style.height = "auto";
-        panel.style.maxWidth = "none";
-        panel.style.maxHeight = "none";
-        panel.style.top = "10px";
-        panel.style.left = "10px";
-        panel.style.right = "10px";
-    } else {
-        panel.style.width = panelWidthInput.value + "px";
-        panel.style.height = panelHeightInput.value + "px";
-        panel.style.top = (posYInput.value || 60) + "px";
-        panel.style.left = (posXInput.value || 60) + "px";
-        panel.style.right = "auto";
-        panel.style.maxWidth = "none";
-        panel.style.maxHeight = "none";
+    if(autoFillCheckbox){
+        autoFillCheckbox.onchange = () => {
+            if(autoFillCheckbox.checked){
+                panel.style.width = "100%";
+                panel.style.height = "auto";
+                panel.style.maxWidth = "none";
+                panel.style.maxHeight = "none";
+                panel.style.top = "10px";
+                panel.style.left = "10px";
+                panel.style.right = "10px";
+            } else {
+                panel.style.width = panelWidthInput.value + "px";
+                panel.style.height = panelHeightInput.value + "px";
+                panel.style.top = (posYInput.value || 60) + "px";
+                panel.style.left = (posXInput.value || 60) + "px";
+                panel.style.right = "auto";
+            }
+        };
     }
-    console.log("Auto-fill:", autoFillCheckbox.checked);
-};
 
-posXInput.onchange = () => {
-    settings.posX = parseInt(posXInput.value) || 60;
-    if (!autoFillCheckbox.checked) {
-        panel.style.left = settings.posX + "px";
-    }
-    GM_setValue("settings", settings);
-};
+    posXInput.onchange = () => {
+        settings.posX = parseInt(posXInput.value) || 60;
+        if(!autoFillCheckbox || !autoFillCheckbox.checked){
+            panel.style.left = settings.posX + "px";
+        }
+        GM_setValue("settings", settings);
+    };
 
-posYInput.onchange = () => {
-    settings.posY = parseInt(posYInput.value) || 60;
-    if (!autoFillCheckbox.checked) {
-        panel.style.top = settings.posY + "px";
-    }
-    GM_setValue("settings", settings);
-};
+    posYInput.onchange = () => {
+        settings.posY = parseInt(posYInput.value) || 60;
+        if(!autoFillCheckbox || !autoFillCheckbox.checked){
+            panel.style.top = settings.posY + "px";
+        }
+        GM_setValue("settings", settings);
+    };
+}
 
 // ===== THEME TOGGLE =====
 const themeToggle = panel.querySelector("#themeToggle");
 const themes = ["auto", "light", "dark"];
 let currentThemeIndex = themes.indexOf(settings.theme);
-if (currentThemeIndex === -1) currentThemeIndex = 0;
+if(currentThemeIndex === -1) currentThemeIndex = 0;
 
-function updateThemeIcon() {
+function updateThemeIcon(){
     const icons = { auto: "🌓", light: "☀️", dark: "🌙" };
     themeToggle.textContent = icons[settings.theme] || "🌓";
-    // FIX: Thêm logging để debug
-    console.log("Theme icon updated:", settings.theme);
 }
 
-themeToggle.onclick = () => {
-    currentThemeIndex = (currentThemeIndex + 1) % themes.length;
-    settings.theme = themes[currentThemeIndex];
-    GM_setValue("settings", settings);
-    applyTheme(settings.theme);
-    updateThemeIcon();
-    // FIX: Thêm logging để debug
-    console.log("Theme changed:", settings.theme);
-};
+if(themeToggle){
+    themeToggle.onclick = () => {
+        currentThemeIndex = (currentThemeIndex + 1) % themes.length;
+        settings.theme = themes[currentThemeIndex];
+        GM_setValue("settings", settings);
+        applyTheme(settings.theme);
+        updateThemeIcon();
+    };
+}
 
-// Apply theme on load
 applyTheme(settings.theme);
 updateThemeIcon();
 
-// Listen for system theme changes
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (settings.theme === "auto") {
+    if(settings.theme === "auto"){
         applyTheme("auto");
     }
 });
@@ -1328,84 +1255,77 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 const opacitySlider = panel.querySelector("#opacitySlider");
 const opacityValue = panel.querySelector("#opacityValue");
 
-opacitySlider.oninput = () => {
-    settings.opacity = parseFloat(opacitySlider.value);
-    panel.style.opacity = settings.opacity;
-    opacityValue.textContent = Math.round(settings.opacity * 100) + "%";
-};
-
-opacitySlider.onchange = () => {
-    GM_setValue("settings", settings);
-    // FIX: Thêm logging để debug
-    console.log("Opacity changed:", settings.opacity);
-};
-
-// ===== COMPACT MODE =====
-const compactModeCheckbox = panel.querySelector("#compactMode");
-compactModeCheckbox.checked = settings.compactMode;
-
-function applyCompactMode() {
-    if (settings.compactMode) {
-        panel.classList.add("compact-mode");
-    } else {
-        panel.classList.remove("compact-mode");
-    }
-    // FIX: Thêm logging để debug
-    console.log("Compact mode applied:", settings.compactMode);
+if(opacitySlider && opacityValue){
+    opacitySlider.oninput = () => {
+        settings.opacity = parseFloat(opacitySlider.value);
+        panel.style.opacity = settings.opacity;
+        opacityValue.textContent = Math.round(settings.opacity * 100) + "%";
+    };
+    opacitySlider.onchange = () => {
+        GM_setValue("settings", settings);
+    };
 }
 
-compactModeCheckbox.onchange = () => {
-    settings.compactMode = compactModeCheckbox.checked;
-    GM_setValue("settings", settings);
-    applyCompactMode();
-    // FIX: Thêm logging để debug
-    console.log("Compact mode:", settings.compactMode);
-};
-
-// Apply compact mode on load
-applyCompactMode();
+// ===== COMPACT MODE =====
+const compactModeCheckbox = document.getElementById("compactMode");
+if(compactModeCheckbox){
+    compactModeCheckbox.checked = settings.compactMode;
+    compactModeCheckbox.onchange = () => {
+        settings.compactMode = compactModeCheckbox.checked;
+        GM_setValue("settings", settings);
+        if(settings.compactMode){
+            panel.classList.add("compact-mode");
+        } else {
+            panel.classList.remove("compact-mode");
+        }
+    };
+    if(settings.compactMode){
+        panel.classList.add("compact-mode");
+    }
+}
 
 // ===== AUTO RESUME TOGGLE =====
 const pauseToggleBtn = panel.querySelector("#pauseToggle");
-pauseToggleBtn.textContent = settings.autoResume ? "⏸ Auto" : "▶ Auto";
-if(!settings.autoResume) pauseToggleBtn.classList.add("auto-disabled");
-
-pauseToggleBtn.onclick = () => {
-    settings.autoResume = !settings.autoResume;
-    GM_setValue("settings", settings);
+if(pauseToggleBtn){
     pauseToggleBtn.textContent = settings.autoResume ? "⏸ Auto" : "▶ Auto";
-    pauseToggleBtn.classList.toggle("auto-disabled", !settings.autoResume);
-    console.log("Auto resume:", settings.autoResume);
-};
+    if(!settings.autoResume) pauseToggleBtn.classList.add("auto-disabled");
+    pauseToggleBtn.onclick = () => {
+        settings.autoResume = !settings.autoResume;
+        GM_setValue("settings", settings);
+        pauseToggleBtn.textContent = settings.autoResume ? "⏸ Auto" : "▶ Auto";
+        pauseToggleBtn.classList.toggle("auto-disabled", !settings.autoResume);
+    };
+}
 
 // ===== UPDATE SETTINGS =====
-const updateIntervalSelect = panel.querySelector("#updateInterval");
-const autoNotifyCheckbox = panel.querySelector("#autoNotify");
-const notifyDurationInput = panel.querySelector("#notifyDuration");
+const updateIntervalSelect = document.getElementById("updateInterval");
+const autoNotifyCheckbox = document.getElementById("autoNotify");
+const notifyDurationInput = document.getElementById("notifyDuration");
 
-// Set initial values
-updateIntervalSelect.value = settings.updateCheckInterval || 24;
-autoNotifyCheckbox.checked = settings.autoShowNotification !== false;
-notifyDurationInput.value = settings.notificationDuration || 10;
+if(updateIntervalSelect){
+    updateIntervalSelect.value = settings.updateCheckInterval || 24;
+    updateIntervalSelect.onchange = () => {
+        settings.updateCheckInterval = parseInt(updateIntervalSelect.value);
+        GM_setValue("settings", settings);
+    };
+}
 
-updateIntervalSelect.onchange = () => {
-    settings.updateCheckInterval = parseInt(updateIntervalSelect.value);
-    GM_setValue("settings", settings);
-    console.log("Update check interval changed:", settings.updateCheckInterval, "hours");
-};
+if(autoNotifyCheckbox){
+    autoNotifyCheckbox.checked = settings.autoShowNotification !== false;
+    autoNotifyCheckbox.onchange = () => {
+        settings.autoShowNotification = autoNotifyCheckbox.checked;
+        GM_setValue("settings", settings);
+    };
+}
 
-autoNotifyCheckbox.onchange = () => {
-    settings.autoShowNotification = autoNotifyCheckbox.checked;
-    GM_setValue("settings", settings);
-    console.log("Auto show notification:", settings.autoShowNotification);
-};
-
-notifyDurationInput.onchange = () => {
-    settings.notificationDuration = clamp(parseInt(notifyDurationInput.value) || 10, 0, 60);
-    notifyDurationInput.value = settings.notificationDuration;
-    GM_setValue("settings", settings);
-    console.log("Notification duration changed:", settings.notificationDuration, "seconds");
-};
+if(notifyDurationInput){
+    notifyDurationInput.value = settings.notificationDuration || 10;
+    notifyDurationInput.onchange = () => {
+        settings.notificationDuration = clamp(parseInt(notifyDurationInput.value) || 10, 0, 60);
+        notifyDurationInput.value = settings.notificationDuration;
+        GM_setValue("settings", settings);
+    };
+}
 
 // ===== HOTKEY =====
 const actions = [
@@ -1429,54 +1349,39 @@ function format(hk){
 
 function renderHotkeys(){
     hkDiv.innerHTML = "";
-
     actions.forEach(a => {
         const line = document.createElement("div");
-
         const label = document.createElement("span");
         label.innerText = a.name + " ";
         label.style.width = "60px";
-
         const btn = document.createElement("button");
         btn.className = "keybtn";
         btn.innerText = format(settings.hotkeys[a.key]);
-
         const reset = document.createElement("button");
         reset.innerText = "⟲";
         reset.className = "resetBtn";
-
+        
         btn.onclick = () => {
             capturingKey = a.key;
             btn.innerText = "Nhập...";
-            // FIX: Thêm logging để debug
-            console.log("Capturing hotkey for:", a.key);
         };
-
         reset.onclick = () => {
             delete settings.hotkeys[a.key];
             GM_setValue("settings", settings);
             renderHotkeys();
-            // FIX: Thêm logging để debug
-            console.log("Hotkey reset for:", a.key);
         };
-
         line.append(label, btn, reset);
         hkDiv.appendChild(line);
     });
-
     const resetAll = document.createElement("button");
     resetAll.innerText = "Reset All";
     resetAll.className = "resetBtn";
     resetAll.style.marginTop = "8px";
-
     resetAll.onclick = () => {
         settings.hotkeys = {};
         GM_setValue("settings", settings);
         renderHotkeys();
-        // FIX: Thêm logging để debug
-        console.log("All hotkeys reset");
     };
-
     hkDiv.appendChild(document.createElement("br"));
     hkDiv.appendChild(resetAll);
 }
@@ -1485,26 +1390,18 @@ renderHotkeys();
 
 // ===== KEYBOARD =====
 document.addEventListener("keydown", e => {
-
-    // FIX: Bỏ qua nếu đang capture và phím là modifier
     if(capturingKey){
-        // Chỉ accept non-modifier keys
         if(e.key === "Control" || e.key === "Alt" || e.key === "Shift" || e.key === "Meta"){
             e.preventDefault();
             return;
         }
-
         e.preventDefault();
-
-        // Nếu không có modifier nào được nhấn cùng, vẫn cho phép
         const hk = {
             key: e.key.length === 1 ? e.key.toUpperCase() : e.key,
             ctrl: e.ctrlKey,
             alt: e.altKey,
             shift: e.shiftKey
         };
-
-        // Kiểm tra trùng lặp
         for(let k in settings.hotkeys){
             if(k === capturingKey) continue;
             const existing = settings.hotkeys[k];
@@ -1515,33 +1412,33 @@ document.addEventListener("keydown", e => {
                 return;
             }
         }
-
         settings.hotkeys[capturingKey] = hk;
         GM_setValue("settings", settings);
         capturingKey = null;
         renderHotkeys();
-        // FIX: Thêm logging để debug
-        console.log("Hotkey set:", capturingKey, hk);
         return;
     }
-
-    // Xử lý hotkey đã set
+    
     for(let k in settings.hotkeys){
         const hk = settings.hotkeys[k];
         if(!hk || !hk.key) continue;
-
         if(
             normalizeKey(e.key) === normalizeKey(hk.key) &&
             e.ctrlKey === !!hk.ctrl &&
             e.altKey === !!hk.alt &&
             e.shiftKey === !!hk.shift
         ){
-            // Không trigger nếu đang type trong input
-            if(e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA"){
-                continue;
-            }
+            if(e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") continue;
             handle(k);
         }
+    }
+    
+    // Escape hides panel
+    if(e.key === "Escape" && panel.style.display !== "none"){
+        panel.style.animation = "fadeOut 0.3s ease";
+        setTimeout(() => {
+            panel.style.display = "none";
+        }, 300);
     }
 });
 
@@ -1553,7 +1450,6 @@ function handle(a){
                 panel.style.display = "none";
                 return;
             }
-            // FIX: Smooth toggle animation
             if(panel.style.display === "none"){
                 panel.style.display = "block";
                 panel.style.animation = "fadeIn 0.3s ease";
@@ -1565,28 +1461,18 @@ function handle(a){
             }
             applyVideo();
             return;
-
         case "speedUp": 
             settings.speed = clamp(settings.speed + 0.1, 0.1, 16); 
-            // FIX: Thêm logging để debug
-            console.log("Speed up:", settings.speed);
             break;
         case "speedDown": 
             settings.speed = clamp(settings.speed - 0.1, 0.1, 16); 
-            // FIX: Thêm logging để debug
-            console.log("Speed down:", settings.speed);
             break;
         case "volUp": 
             settings.volume = clamp(settings.volume + 0.1, 0, 5); 
-            // FIX: Thêm logging để debug
-            console.log("Volume up:", settings.volume);
             break;
         case "volDown": 
             settings.volume = clamp(settings.volume - 0.1, 0, 5); 
-            // FIX: Thêm logging để debug
-            console.log("Volume down:", settings.volume);
             break;
-
         case "moveToMouse":
             panel.style.transition = "left 0.2s ease, top 0.2s ease";
             panel.style.left = clamp(lastMouseX, 0, window.innerWidth - 260) + "px";
@@ -1595,51 +1481,35 @@ function handle(a){
                 panel.style.transition = "opacity 0.2s ease, background 0.3s ease, transform 0.2s ease";
             }, 200);
             return;
-
         case "toggleVideoInfo":
             settings.showVideoInfo = !settings.showVideoInfo;
-            if (!settings.showVideoInfo) {
-                if (videoInfoElement) {
-                    videoInfoElement.remove();
-                    videoInfoElement = null;
-                }
-                if (videoInfoInterval) {
-                    clearInterval(videoInfoInterval);
-                    videoInfoInterval = null;
-                }
-            } else {
-                // Re-initialize video info
-                updateVideoInfo();
-                const v = getVideo();
-                if (v) {
-                    videoInfoInterval = setInterval(updateVideoInfo, 1000);
-                }
+            if(!settings.showVideoInfo && videoInfoElement){
+                videoInfoElement.remove();
+                videoInfoElement = null;
+            }
+            if(videoInfoInterval){
+                clearInterval(videoInfoInterval);
+                videoInfoInterval = null;
+            }
+            if(settings.showVideoInfo && getVideo()){
+                videoInfoInterval = setInterval(updateVideoInfo, 1000);
             }
             GM_setValue("settings", settings);
-            console.log("Toggle video info:", settings.showVideoInfo);
-            return; // Don't call applyVideo() for toggle
-
+            return;
         case "toggleCustomUI":
             settings.customUI = !settings.customUI;
             applyCustomUI();
             GM_setValue("settings", settings);
-            console.log("Toggle custom UI:", settings.customUI);
-            return; // Don't call applyVideo() for toggle
-
+            return;
         case "toggleLoop":
             settings.autoLoop = !settings.autoLoop;
             const v = getVideo();
-            if (v) v.loop = settings.autoLoop;
+            if(v) v.loop = settings.autoLoop;
             GM_setValue("settings", settings);
-            console.log("Toggle loop:", settings.autoLoop);
             return;
     }
-
-    // Only call applyVideo and update inputs for non-toggle actions
     GM_setValue("settings", settings);
     applyVideo();
-    
-    // Update inputs
     updateVolumeInput();
     speedInput.value = settings.speed;
 }
@@ -1655,9 +1525,7 @@ const header = panel.querySelector("#header");
 
 header.addEventListener("mousedown", e => {
     if(isLocked) return;
-    // Không drag nếu click vào button
     if(e.target.tagName === "BUTTON" || e.target.tagName === "INPUT") return;
-    
     e.preventDefault();
     isDragging = true;
     offsetX = e.clientX - panel.offsetLeft;
@@ -1666,16 +1534,14 @@ header.addEventListener("mousedown", e => {
 
 document.addEventListener("mousemove", e => {
     if(!isDragging) return;
-
     if(raf) cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
         const newLeft = clamp(e.clientX - offsetX, 0, window.innerWidth - 260);
         const newTop = clamp(e.clientY - offsetY, 0, window.innerHeight - 120);
         panel.style.left = newLeft + "px";
         panel.style.top = newTop + "px";
-        // Update position inputs
-        if (posXInput) posXInput.value = newLeft;
-        if (posYInput) posYInput.value = newTop;
+        if(posXInput) posXInput.value = newLeft;
+        if(posYInput) posYInput.value = newTop;
         raf = null;
     });
 });
@@ -1687,24 +1553,26 @@ document.addEventListener("mouseup", () => {
         settings.panelWidth = parseInt(panel.style.width) || 260;
         settings.panelHeight = parseInt(panel.style.height) || 200;
         GM_setValue("settings", settings);
-        console.log("Panel position saved:", settings.posX, settings.posY);
     }
     isDragging = false;
 });
 
 // ===== LOCK =====
-panel.querySelector("#lock").onclick = function(){
-    isLocked = !isLocked;
-    this.textContent = isLocked ? "🔒" : "🔓";
-    header.style.cursor = isLocked ? "default" : "move";
-    console.log("Panel locked:", isLocked);
-};
+const lockBtn = panel.querySelector("#lock");
+if(lockBtn){
+    lockBtn.onclick = () => {
+        isLocked = !isLocked;
+        lockBtn.textContent = isLocked ? "🔒" : "🔓";
+        header.style.cursor = isLocked ? "default" : "move";
+    };
+}
 
-panel.querySelector("#min").onclick = () => {
-    control.style.display =
-        control.style.display === "none" ? "block" : "none";
-    console.log("Panel minimized:", control.style.display === "none");
-};
+const minBtn = panel.querySelector("#min");
+if(minBtn){
+    minBtn.onclick = () => {
+        control.style.display = control.style.display === "none" ? "block" : "none";
+    };
+}
 
 // ===== VIDEO DETECTION =====
 let detectionTimeout = null;
@@ -1721,7 +1589,6 @@ function detectVideoOnce(){
     lastDetectionTime = now;
     
     const v = getVideo();
-
     if(v !== lastVideo){
         if(lastVideo){
             lastVideo.removeEventListener('canplay', onVideoReady);
@@ -1729,9 +1596,8 @@ function detectVideoOnce(){
             lastVideo.removeEventListener('error', onVideoError);
             cleanupAudioContext(lastVideo);
         }
-        
         lastVideo = v;
-
+        
         if(settings.autoVideo){
             if(v){
                 panel.style.display = "block";
@@ -1746,17 +1612,13 @@ function detectVideoOnce(){
 
         if(v){
             console.log("Video detected:", v.src || v.currentSrc);
-            
             v.addEventListener('canplay', onVideoReady);
             v.addEventListener('loadedmetadata', onVideoReady);
             v.addEventListener('error', onVideoError);
-            
-            // Apply loop setting to new video
             v.loop = settings.autoLoop;
             
-            // Start video info update interval
-            if (videoInfoInterval) clearInterval(videoInfoInterval);
-            if (settings.showVideoInfo) {
+            if(videoInfoInterval) clearInterval(videoInfoInterval);
+            if(settings.showVideoInfo){
                 videoInfoInterval = setInterval(updateVideoInfo, 1000);
             }
             
@@ -1768,116 +1630,88 @@ function detectVideoOnce(){
 }
 
 function initVideoDetection(){
-    // FIX: Thêm play event
+    if(document.readyState === "complete"){
+        detectVideoOnce();
+    } else {
+        window.addEventListener("load", detectVideoOnce);
+    }
+    
     document.addEventListener("play", e => {
-        if(e.target.tagName === "VIDEO"){
-            detectVideoOnce();
-        }
+        if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
-
-    // FIX: Thêm thêm events để detect video tốt hơn
     document.addEventListener("playing", e => {
-        if(e.target.tagName === "VIDEO"){
-            detectVideoOnce();
-        }
+        if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
-    
     document.addEventListener("loadeddata", e => {
-        if(e.target.tagName === "VIDEO"){
-            detectVideoOnce();
-        }
+        if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
-    
-    // FIX: Thêm thêm events để detect video source changes
     document.addEventListener("loadstart", e => {
-        if(e.target.tagName === "VIDEO"){
-            console.log("Video loadstart detected");
-            detectVideoOnce();
-        }
+        if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
-    
     document.addEventListener("durationchange", e => {
-        if(e.target.tagName === "VIDEO"){
-            console.log("Video durationchange detected");
-            detectVideoOnce();
-        }
+        if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
 
-    // FIX: Optimized MutationObserver - observe cả addedNodes và attributes
-    if(observer) observer.disconnect();
-    
-    observer = new MutationObserver(mutations => {
-        let shouldCheck = false;
-        for(const mut of mutations){
-            // Check added nodes
-            if(mut.addedNodes.length > 0){
-                for(const node of mut.addedNodes){
-                    if(node.nodeName === "VIDEO" || 
-                       (node.querySelector && node.querySelector("video"))){
-                        shouldCheck = true;
-                        break;
+    try {
+        if(observer) observer.disconnect();
+        observer = new MutationObserver(mutations => {
+            let shouldCheck = false;
+            for(const mut of mutations){
+                if(mut.addedNodes.length > 0){
+                    for(const node of mut.addedNodes){
+                        if(node.nodeName === "VIDEO" || 
+                           (node.querySelector && node.querySelector("video"))){
+                            shouldCheck = true;
+                            break;
+                        }
                     }
                 }
+                if(mut.type === "attributes" && mut.attributeName === "src"){
+                    shouldCheck = true;
+                }
+                if(shouldCheck) break;
             }
-            // Check attribute changes
-            if(mut.type === "attributes" && mut.attributeName === "src"){
-                shouldCheck = true;
+            if(shouldCheck){
+                requestAnimationFrame(detectVideoOnce);
             }
-            if(shouldCheck) break;
-        }
-        
-        if(shouldCheck){
-            requestAnimationFrame(detectVideoOnce);
-        }
-    });
-
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['src', 'currentSrc', 'style', 'class']
-    });
-
-    // Auto skip ad interval
-    if (settings.autoSkipAd) {
-        setInterval(skipAd, 1000);
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src', 'currentSrc', 'style', 'class']
+        });
+    } catch(e) {
+        console.warn("MutationObserver error:", e);
     }
 
-    // Force loop interval
-    if (settings.autoLoop) {
+    if(settings.autoSkipAd){
+        setInterval(skipAd, 1000);
+    }
+    if(settings.autoLoop){
         setInterval(forceLoop, 500);
     }
 }
 
 // ===== EVENT LISTENERS =====
 function initEventListeners(){
-    // Window resize - đảm bảo panel không bị mất
     window.addEventListener("resize", () => {
         panel.style.left = clamp(parseInt(panel.style.left) || 0, 0, window.innerWidth - 260) + "px";
         panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 120) + "px";
-        // FIX: Thêm logging để debug
-        console.log("Window resized, panel position adjusted");
     });
     
-    // Cleanup khi page unload
     window.addEventListener("unload", () => {
         if(observer) observer.disconnect();
         if(lastVideo) cleanupAudioContext(lastVideo);
         if(videoInfoInterval) clearInterval(videoInfoInterval);
-        console.log("Cleanup completed on page unload");
     });
 }
 
 // ===== START =====
 init();
+console.log("Video Control Panel PRO v" + CURRENT_VERSION + " - Fixed version");
 
-// FIX: Thêm version info để debug
-console.log("Video Control Panel PRO v" + CURRENT_VERSION + " - Optimized with instant detection, volume boost, and error handling");
-
-// Check for updates on startup
 checkForUpdates();
-
-// Check for conflicts with LITE version
 setTimeout(checkConflict, 2000);
 
 })();
