@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.3.4
+// @version      1.3.3
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -22,6 +22,7 @@ const settings = GM_getValue("settings", {
     speed: 1,
     color: "#2b5797",
     autoVideo: true,
+    autoLoop: true,
     hotkey: "V",
     lastUpdateCheck: 0
 });
@@ -227,6 +228,20 @@ function applySpeed(){
     v.playbackRate = clamp(settings.speed, 0.1, 16);
 }
 
+// ===== FORCE LOOP =====
+function forceLoop() {
+    if (!settings.autoLoop) return;
+
+    const v = getVideo();
+    if (!v) return;
+
+    if (v.ended || (v.currentTime >= v.duration - 0.5 && v.duration > 0)) {
+        console.log("Force looping video...");
+        v.currentTime = 0;
+        v.play().catch(e => console.warn("Play failed:", e));
+    }
+}
+
 // ===== PANEL =====
 const panel = document.createElement("div");
 panel.id = "vcp-panel";
@@ -238,9 +253,10 @@ panel.innerHTML = `
         <input type="number" id="vcp-vol" step="0.1" min="0" max="5" value="${settings.volume}">
         <div id="vcp-speed">
             <button class="vcp-speed-btn" data-speed="1">1x</button>
-            <button class="vcp-speed-btn" data-speed="1.5">1.5x</button>
             <button class="vcp-speed-btn" data-speed="2">2x</button>
+            <button class="vcp-speed-btn" data-speed="3">3x</button>
         </div>
+        <button id="vcp-loop" title="Loop">🔁</button>
         <button id="vcp-close">×</button>
     </div>
 `;
@@ -328,6 +344,18 @@ GM_addStyle(`
     padding:0 4px;
 }
 #vcp-close:hover{opacity:0.7;}
+#vcp-loop{
+    background:transparent;
+    border:none;
+    color:white;
+    font-size:16px;
+    cursor:pointer;
+    padding:0 4px;
+}
+#vcp-loop.active{
+    color:#ff9800;
+}
+#vcp-loop:hover{opacity:0.7;}
 @keyframes slideIn{
     from{opacity:0;transform:translateX(100px);}
     to{opacity:1;transform:translateX(0);}
@@ -532,6 +560,36 @@ panel.querySelector("#vcp-close").addEventListener("click", () => {
     isPanelVisible = false;
     panel.style.display = "none";
 });
+
+// ===== LOOP TOGGLE =====
+const loopBtn = panel.querySelector("#vcp-loop");
+let loopInterval = null;
+
+function updateLoopBtn() {
+    loopBtn.classList.toggle("active", settings.autoLoop);
+}
+
+function toggleLoop() {
+    settings.autoLoop = !settings.autoLoop;
+    GM_setValue("settings", settings);
+    updateLoopBtn();
+    
+    if(settings.autoLoop && !loopInterval){
+        loopInterval = setInterval(forceLoop, 500);
+    } else if(!settings.autoLoop && loopInterval){
+        clearInterval(loopInterval);
+        loopInterval = null;
+    }
+}
+
+if(loopBtn){
+    updateLoopBtn();
+    loopBtn.addEventListener("click", toggleLoop);
+    
+    if(settings.autoLoop){
+        loopInterval = setInterval(forceLoop, 500);
+    }
+}
 
 // ===== TOGGLE HOTKEY =====
 const HOTKEY = settings.hotkey && settings.hotkey.trim() ? settings.hotkey.trim() : "V";
