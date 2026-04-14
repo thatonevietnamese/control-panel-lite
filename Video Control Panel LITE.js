@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.3.4
+// @version      1.3.5
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -383,7 +383,11 @@ function init(){
 // ===== AUTO SHOW/HIDE =====
 function detectVideo(){
     const v = getVideo();
-    if(v !== lastVideo){
+    const videoSrc = v ? (v.src || v.currentSrc || '') : '';
+    const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
+    
+    // Detect new video or src change (e.g., after skip ad)
+    if(v !== lastVideo || videoSrc !== lastSrc){
         // Cleanup previous video audio context
         if(lastVideo){
             cleanupAudioContext(lastVideo);
@@ -400,7 +404,7 @@ function detectVideo(){
                 panel.style.display = "block";
             }
             
-            // Apply settings to new video
+            // Apply settings to new video (including after ad skip)
             applyVolume();
             applySpeed();
         } else if(settings.autoVideo){
@@ -634,7 +638,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "1.3.4";
+const CURRENT_VERSION = "1.3.5";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
