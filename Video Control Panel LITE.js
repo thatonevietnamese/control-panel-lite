@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.3.5
+// @version      1.3.6
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -256,7 +256,10 @@ panel.innerHTML = `
             <button class="vcp-speed-btn" data-speed="2">2x</button>
             <button class="vcp-speed-btn" data-speed="3">3x</button>
         </div>
-        <button id="vcp-loop" title="Loop">🔁</button>
+        <label id="vcp-loop-label" title="Loop">
+            <input type="checkbox" id="vcp-loop-check" ${settings.autoLoop ? 'checked' : ''}>
+            <span>🔁</span>
+        </label>
         <button id="vcp-close">×</button>
     </div>
 `;
@@ -344,18 +347,25 @@ GM_addStyle(`
     padding:0 4px;
 }
 #vcp-close:hover{opacity:0.7;}
-#vcp-loop{
-    background:transparent;
-    border:none;
-    color:white;
-    font-size:16px;
+#vcp-loop-label{
+    display:flex;
+    align-items:center;
     cursor:pointer;
     padding:0 4px;
 }
-#vcp-loop.active{
+#vcp-loop-label input{
+    display:none;
+}
+#vcp-loop-label span{
+    font-size:16px;
+    opacity:0.6;
+    transition:opacity 0.2s;
+}
+#vcp-loop-label input:checked + span{
+    opacity:1;
     color:#ff9800;
 }
-#vcp-loop:hover{opacity:0.7;}
+#vcp-loop-label:hover span{opacity:0.8;}
 @keyframes slideIn{
     from{opacity:0;transform:translateX(100px);}
     to{opacity:1;transform:translateX(0);}
@@ -566,17 +576,20 @@ panel.querySelector("#vcp-close").addEventListener("click", () => {
 });
 
 // ===== LOOP TOGGLE =====
-const loopBtn = panel.querySelector("#vcp-loop");
+const loopCheck = panel.querySelector("#vcp-loop-check");
 let loopInterval = null;
 
-function updateLoopBtn() {
-    loopBtn.classList.toggle("active", settings.autoLoop);
+function updateLoopState() {
+    if(loopCheck) loopCheck.checked = settings.autoLoop;
 }
 
 function toggleLoop() {
-    settings.autoLoop = !settings.autoLoop;
+    if(loopCheck) {
+        settings.autoLoop = loopCheck.checked;
+    } else {
+        settings.autoLoop = !settings.autoLoop;
+    }
     GM_setValue("settings", settings);
-    updateLoopBtn();
     
     if(settings.autoLoop && !loopInterval){
         loopInterval = setInterval(forceLoop, 500);
@@ -586,9 +599,9 @@ function toggleLoop() {
     }
 }
 
-if(loopBtn){
-    updateLoopBtn();
-    loopBtn.addEventListener("click", toggleLoop);
+if(loopCheck){
+    updateLoopState();
+    loopCheck.addEventListener("change", toggleLoop);
     
     if(settings.autoLoop){
         loopInterval = setInterval(forceLoop, 500);
@@ -638,7 +651,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "1.3.5";
+const CURRENT_VERSION = "1.3.6";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
