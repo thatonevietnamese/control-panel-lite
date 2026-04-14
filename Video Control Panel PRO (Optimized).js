@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      1.16.4
+// @version      1.16.5
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -47,7 +47,7 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "1.16.4";
+const CURRENT_VERSION = "1.16.5";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -777,6 +777,8 @@ function escapeHtml(text) {
 }
 
 // ===== AUTO SKIP AD =====
+let lastAdDetected = false;
+
 function skipAd() {
     if (!settings.autoSkipAd) return;
 
@@ -784,20 +786,33 @@ function skipAd() {
     if (skipBtn) {
         console.log("Skipping ad...");
         skipBtn.click();
+        lastAdDetected = true;
+        setTimeout(() => {
+            console.log("Ad skipped, re-applying speed...");
+            applyVideo();
+        }, 500);
         return;
     }
 
     const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
     if (adOverlay) {
+        lastAdDetected = true;
         adOverlay.click();
+        setTimeout(() => {
+            applyVideo();
+        }, 500);
         return;
     }
 
     const adIndicator = document.querySelector('.ytp-ad-text, .ad-showing');
     if (adIndicator) {
+        lastAdDetected = true;
         const possibleSkip = document.querySelector('.ytp-ad-skip-button, [data-ad-skip]');
         if (possibleSkip) {
             possibleSkip.click();
+            setTimeout(() => {
+                applyVideo();
+            }, 500);
         }
     }
 }
@@ -1826,6 +1841,16 @@ function initVideoDetection(){
     if(settings.autoLoop){
         setInterval(forceLoop, 500);
     }
+    
+    // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
+    setInterval(() => {
+        const v = getVideo();
+        if(v && v.readyState >= 2 && !v.paused){
+            if(lastApplied.speed !== settings.speed || lastApplied.volume !== settings.volume){
+                applyVideo();
+            }
+        }
+    }, 2000);
 }
 
 // ===== EVENT LISTENERS =====
