@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      16.1.1
+// @version      1.16.4
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -35,7 +35,6 @@ const settings = GM_getValue("settings", {
     hotkeys: {},
     theme: "auto",
     opacity: 1.0,
-    compactMode: false,
     lastUpdateCheck: 0,
     updateAvailable: false,
     updateCheckInterval: 24,
@@ -43,11 +42,12 @@ const settings = GM_getValue("settings", {
     notificationDuration: 10,
     customUI: false,
     removeShorts: false,
-    removeSidebar: false
+    removeSidebar: false,
+    autoFill: false
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "16.1.1";
+const CURRENT_VERSION = "1.16.4";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -373,6 +373,8 @@ panel.innerHTML = `
     <button id="tab2" data-tooltip="Cài đặt">Cài đặt</button>
     <button id="themeToggle" data-tooltip="Đổi theme">🌓</button>
     <button id="min" data-tooltip="Thu nhỏ">_</button>
+    <button id="max" data-tooltip="Phóng to">☐</button>
+    <button id="close" data-tooltip="Thoát">✕</button>
     <button id="lock" data-tooltip="Khóa">🔓</button>
 </div>
 
@@ -380,7 +382,6 @@ panel.innerHTML = `
     <div class="row">🔊 <input type="number" id="volume" step="0.1" min="0" max="5" data-tooltip="Âm lượng (0-5x)"></div>
     <div class="row">⚡ <input type="number" id="speed" step="0.1" min="0.1" max="16" data-tooltip="Tốc độ (0.1-16x)"></div>
     <div class="row"><button id="pauseToggle" data-tooltip="Dừng auto-resume">⏸ Auto</button></div>
-    <div class="row"><label><input type="checkbox" id="compactMode"> Compact</label></div>
 </div>
 
 <div id="settings" style="display:none">
@@ -442,6 +443,7 @@ panel.innerHTML = `
     <span>⌨️ Hotkey</span>
     <div id="hotkeys"></div>
 </div>
+<div id="resize-handle"></div>
 `;
 
 // ===== THEME FUNCTIONS =====
@@ -493,8 +495,9 @@ GM_addStyle(`
     top:${clamp(parseInt(settings.posY) || 60, 0, window.innerHeight - 120)}px;
     left:${clamp(parseInt(settings.posX) || 60, 0, window.innerWidth - 260)}px;
     width:${settings.panelWidth || 260}px;
-    min-height:${settings.panelHeight || 200}px;
-    padding:6px;
+    min-height:60px;
+    padding:4px;
+    margin:0;
     background:var(--panel-bg);
     color:var(--panel-text);
     border-radius:10px;
@@ -502,12 +505,19 @@ GM_addStyle(`
     font-family:Tahoma;
     transition: opacity 0.2s ease, background 0.3s ease;
     opacity:${settings.opacity};
-    overflow:hidden;
+    overflow:auto;
 }
 #panel, #panel *{ user-select:none !important; }
 
-#header{display:flex;gap:3px;cursor:move;}
-#settings{overflow-x:hidden;max-width:100%;}
+#header{display:flex;gap:3px;cursor:move;align-items:center;margin-bottom:4px;padding:2px;}
+#header button{padding:2px 6px;font-size:10px;}
+#header button#min, #header button#max, #header button#close{padding:2px 5px;}
+#control{padding:0;margin:0;}
+#control .row{margin:2px 0;}
+#settings{overflow-x:auto;overflow-y:auto;max-height:300px;max-width:100%;}
+#settings::-webkit-scrollbar{width:5px;}
+#settings::-webkit-scrollbar-track{background:rgba(255,255,255,0.05);}
+#settings::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px;}
 #settings .section{margin-bottom:8px;}
 #settings .section > span{display:block;font-size:11px;font-weight:bold;color:var(--panel-text);margin-bottom:4px;opacity:0.8;}
 .size-pos-grid{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
@@ -626,11 +636,6 @@ input[type="text"]{
     cursor:pointer;
 }
 
-.compact-mode .row span{display:none;}
-.compact-mode .row input[type="number"]{width:60px;}
-.compact-mode #settings{display:none !important;}
-.compact-mode #compactMode{transform:scale(0.8);margin:0;}
-
 [data-tooltip]{position:relative;}
 [data-tooltip]:hover::after{
     content:attr(data-tooltip);
@@ -661,6 +666,20 @@ input[type="text"]{
     to{opacity:1;transform:translateX(0);}
 }
 #panel{animation:fadeIn 0.3s ease;}
+
+#panel::-webkit-scrollbar{width:6px;}
+#panel::-webkit-scrollbar-track{background:rgba(255,255,255,0.1);}
+#panel::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.3);border-radius:3px;}
+
+#resize-handle{
+    position:absolute;
+    bottom:0;
+    right:0;
+    width:16px;
+    height:16px;
+    cursor:se-resize;
+    background:linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.3) 50%);
+}
 `);
 
 // ===== VIDEO INFO DISPLAY =====
@@ -947,6 +966,18 @@ function init(){
     initEventListeners();
     initVideoDetection();
     
+    if(settings.autoFill){
+        panel.style.width = "100%";
+        panel.style.height = "auto";
+        panel.style.maxWidth = "none";
+        panel.style.maxHeight = "none";
+        panel.style.top = "10px";
+        panel.style.left = "10px";
+        panel.style.right = "10px";
+    } else {
+        panel.style.minHeight = "60px";
+    }
+    
     console.log("Video Control Panel PRO v" + CURRENT_VERSION + " initialized");
     addSmoothTransitions();
 }
@@ -1185,8 +1216,10 @@ if(panelWidthInput && panelHeightInput && posXInput && posYInput){
     };
 
     if(autoFillCheckbox){
+        autoFillCheckbox.checked = settings.autoFill || false;
         autoFillCheckbox.onchange = () => {
             if(autoFillCheckbox.checked){
+                settings.autoFill = true;
                 panel.style.width = "100%";
                 panel.style.height = "auto";
                 panel.style.maxWidth = "none";
@@ -1194,13 +1227,21 @@ if(panelWidthInput && panelHeightInput && posXInput && posYInput){
                 panel.style.top = "10px";
                 panel.style.left = "10px";
                 panel.style.right = "10px";
+                if(posXInput) posXInput.value = 10;
+                if(posYInput) posYInput.value = 10;
             } else {
-                panel.style.width = panelWidthInput.value + "px";
-                panel.style.height = panelHeightInput.value + "px";
-                panel.style.top = (posYInput.value || 60) + "px";
-                panel.style.left = (posXInput.value || 60) + "px";
+                settings.autoFill = false;
+                const w = parseInt(panelWidthInput?.value) || 260;
+                const h = parseInt(panelHeightInput?.value) || 200;
+                const x = parseInt(posXInput?.value) || 60;
+                const y = parseInt(posYInput?.value) || 60;
+                panel.style.width = w + "px";
+                panel.style.height = h + "px";
+                panel.style.top = y + "px";
+                panel.style.left = x + "px";
                 panel.style.right = "auto";
             }
+            GM_setValue("settings", settings);
         };
     }
 
@@ -1264,24 +1305,6 @@ if(opacitySlider && opacityValue){
     opacitySlider.onchange = () => {
         GM_setValue("settings", settings);
     };
-}
-
-// ===== COMPACT MODE =====
-const compactModeCheckbox = document.getElementById("compactMode");
-if(compactModeCheckbox){
-    compactModeCheckbox.checked = settings.compactMode;
-    compactModeCheckbox.onchange = () => {
-        settings.compactMode = compactModeCheckbox.checked;
-        GM_setValue("settings", settings);
-        if(settings.compactMode){
-            panel.classList.add("compact-mode");
-        } else {
-            panel.classList.remove("compact-mode");
-        }
-    };
-    if(settings.compactMode){
-        panel.classList.add("compact-mode");
-    }
 }
 
 // ===== AUTO RESUME TOGGLE =====
@@ -1568,11 +1591,123 @@ if(lockBtn){
 }
 
 const minBtn = panel.querySelector("#min");
+let isMinimized = false;
 if(minBtn){
     minBtn.onclick = () => {
-        control.style.display = control.style.display === "none" ? "block" : "none";
+        isMinimized = !isMinimized;
+        minBtn.textContent = isMinimized ? "☰" : "_";
+        if(isMinimized){
+            control.style.display = "none";
+            header.style.display = "none";
+            panel.style.minWidth = "30px";
+            panel.style.minHeight = "30px";
+            panel.style.width = "30px";
+            panel.style.padding = "2px";
+        } else {
+            control.style.display = "block";
+            header.style.display = "flex";
+            panel.style.minWidth = "150px";
+            panel.style.minHeight = "60px";
+            panel.style.width = "";
+            panel.style.padding = "4px";
+        }
     };
 }
+
+panel.addEventListener("click", (e) => {
+    if(isMinimized && e.target === panel){
+        isMinimized = false;
+        minBtn.textContent = "_";
+        control.style.display = "block";
+        header.style.display = "flex";
+        panel.style.minWidth = "150px";
+        panel.style.minHeight = "60px";
+        panel.style.width = "";
+        panel.style.padding = "4px";
+    }
+});
+
+const maxBtn = panel.querySelector("#max");
+const closeBtn = panel.querySelector("#close");
+let isMaximized = settings.autoFill || false;
+
+if(maxBtn){
+    maxBtn.textContent = isMaximized ? "❐" : "☐";
+    maxBtn.onclick = () => {
+        isMaximized = !isMaximized;
+        maxBtn.textContent = isMaximized ? "❐" : "☐";
+        if(isMaximized){
+            settings.autoFill = true;
+            panel.style.width = "100%";
+            panel.style.height = "auto";
+            panel.style.maxWidth = "none";
+            panel.style.maxHeight = "none";
+            panel.style.top = "10px";
+            panel.style.left = "10px";
+            panel.style.right = "10px";
+            if(autoFillCheckbox) autoFillCheckbox.checked = true;
+        } else {
+            settings.autoFill = false;
+            const w = parseInt(panelWidthInput?.value) || 260;
+            const h = parseInt(panelHeightInput?.value) || 200;
+            const x = parseInt(posXInput?.value) || 60;
+            const y = parseInt(posYInput?.value) || 60;
+            panel.style.width = w + "px";
+            panel.style.height = h + "px";
+            panel.style.top = y + "px";
+            panel.style.left = x + "px";
+            panel.style.right = "auto";
+            if(autoFillCheckbox) autoFillCheckbox.checked = false;
+        }
+        GM_setValue("settings", settings);
+    };
+}
+
+if(closeBtn){
+    closeBtn.onclick = () => {
+        panel.style.display = "none";
+    };
+}
+
+const resizeHandle = panel.querySelector("#resize-handle");
+let isResizing = false;
+let startX, startY, startW, startH;
+
+if(resizeHandle){
+    resizeHandle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        isResizing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = panel.offsetWidth;
+        startH = panel.offsetHeight;
+        document.body.style.cursor = "se-resize";
+    });
+}
+
+document.addEventListener("mousemove", (e) => {
+    if(!isResizing) return;
+    const newW = startW + (e.clientX - startX);
+    const newH = startH + (e.clientY - startY);
+    if(newW >= 150 && newW <= window.innerWidth){
+        panel.style.width = newW + "px";
+        if(panelWidthInput) panelWidthInput.value = newW;
+    }
+    if(newH >= 80 && newH <= window.innerHeight){
+        panel.style.height = newH + "px";
+        if(panelHeightInput) panelHeightInput.value = newH;
+    }
+});
+
+document.addEventListener("mouseup", () => {
+    if(isResizing){
+        isResizing = false;
+        document.body.style.cursor = "";
+        settings.panelWidth = panel.offsetWidth;
+        settings.panelHeight = panel.offsetHeight;
+        GM_setValue("settings", settings);
+    }
+});
 
 // ===== VIDEO DETECTION =====
 let detectionTimeout = null;
