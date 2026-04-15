@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      2.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v1.4)
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v2.1)
 // ==/UserScript==
 
 (function () {
@@ -475,6 +475,17 @@ function initDetection(){
     } catch(e) {
         console.warn("MutationObserver not available:", e);
     }
+    
+    // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
+    setInterval(() => {
+        const v = getVideo();
+        if(v && v.readyState >= 2 && !v.paused){
+            if(v.playbackRate !== settings.speed || v.volume !== Math.min(settings.volume, 1)){
+                applyVolume();
+                applySpeed();
+            }
+        }
+    }, 2000);
 }
 
 // ===== VOLUME INPUT =====
@@ -656,7 +667,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "1.4";
+const CURRENT_VERSION = "2.1";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
