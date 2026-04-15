@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      1.3.7
+// @version      1.4
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v1.3.7)
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v1.4)
 // ==/UserScript==
 
 (function () {
@@ -23,7 +23,7 @@ const settings = GM_getValue("settings", {
     color: "#2b5797",
     autoVideo: true,
     autoLoop: true,
-    hotkey: "V",
+    hotkey: "*",
     lastUpdateCheck: 0
 });
 
@@ -189,7 +189,6 @@ function getOrCreateGainNode(video){
         console.log("Audio boost initialized for video");
         return data;
     } catch(e) {
-        console.warn("Audio boost not available:", e.message);
         audioContextSupported = false;
         return null;
     }
@@ -609,7 +608,7 @@ if(loopCheck){
 }
 
 // ===== TOGGLE HOTKEY =====
-const HOTKEY = settings.hotkey && settings.hotkey.trim() ? settings.hotkey.trim() : "V";
+const HOTKEY = settings.hotkey && settings.hotkey.trim() ? settings.hotkey.trim() : "*";
 
 document.addEventListener("keydown", e => {
     const tag = e.target.tagName;
@@ -626,11 +625,17 @@ document.addEventListener("keydown", e => {
         return;
     }
     
-    const key = e.key.toUpperCase();
     const isModifier = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
     
-    // Toggle panel with hotkey (no modifiers)
-    if(key === HOTKEY.toUpperCase() && !isModifier){
+    // Toggle panel with hotkey (exact match for single char, code for special keys)
+    let hotkeyMatch = false;
+    if(HOTKEY.length === 1){
+        hotkeyMatch = e.key === HOTKEY;
+    } else {
+        hotkeyMatch = e.code === HOTKEY.toUpperCase();
+    }
+    
+    if(hotkeyMatch && !isModifier){
         e.preventDefault();
         
         const v = getVideo();
@@ -651,7 +656,7 @@ document.addEventListener("keydown", e => {
 });
 
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "1.3.7";
+const CURRENT_VERSION = "1.4";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
@@ -717,7 +722,7 @@ function showUpdateNotification(newVersion) {
 }
 
 // ===== CLEANUP =====
-window.addEventListener("unload", () => {
+window.addEventListener("pagehide", () => {
     if(observer) observer.disconnect();
     if(lastVideo) cleanupAudioContext(lastVideo);
 });
