@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      1.16.6
+// @version      1.17
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v16.1.1 - Fixed)
+// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v1.17)
 // ==/UserScript==
 
 (function () {
@@ -23,11 +23,13 @@ const settings = GM_getValue("settings", {
     color: "#2b5797",
     wallpaper: "",
     autoShow: true,
-    autoVideo: false,
+    autoVideo: true,
     autoResume: true,
     autoLoop: true,
     autoSkipAd: true,
     showVideoInfo: true,
+    autoApplySpeed: true,
+    hotkey: "*",
     posX: 60,
     posY: 60,
     panelWidth: 260,
@@ -47,7 +49,7 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "1.16.6";
+const CURRENT_VERSION = "1.17";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -226,7 +228,6 @@ function getOrCreateGainNode(video){
         console.log("Audio boost initialized for video");
         return data;
     } catch(e) {
-        console.warn("Audio boost not available:", e.message);
         audioContextSupported = false;
         return null;
     }
@@ -243,7 +244,9 @@ function smoothGainTransition(gainNode, targetValue, duration = 0.1){
 
 // ===== HELPERS =====
 function normalizeKey(key){
-    return (key || "").replace(/\s+/g,'').toLowerCase();
+    if(!key) return "";
+    // Keep special characters like *, +, - as-is, only remove spaces
+    return key.replace(/\s+/g, '').toUpperCase();
 }
 
 function clamp(val, min, max){
@@ -394,6 +397,7 @@ panel.innerHTML = `
             <label><input type="checkbox" id="autoResume"> ⏯️ Resume</label>
             <label><input type="checkbox" id="showVideoInfo"> 📺 Info</label>
             <label><input type="checkbox" id="autoSkipAd"> ⏭️ Skip Ad</label>
+            <label><input type="checkbox" id="autoApplySpeed"> ⚡ Auto Speed</label>
         </div>
     </div>
 
@@ -715,15 +719,65 @@ function getYouTubeVideoId() {
 
 function getYouTubeTitle() {
     try {
-        const titleEl = document.querySelector('h1.ytd-video-primary-info-renderer, h1.ytd-watch-metadata, h1');
-        return titleEl ? titleEl.textContent.trim() : null;
+        // Try meta og:title first (most reliable on YouTube)
+        let titleEl = document.querySelector('meta[property="og:title"]');
+        if(titleEl && titleEl.content) return titleEl.content.trim();
+        
+        // Watch page title
+        titleEl = document.querySelector('h1.ytd-watch-metadata');
+        if(titleEl) return titleEl.textContent.trim();
+        
+        // Video info section title
+        titleEl = document.querySelector('#title');
+        if(titleEl) return titleEl.textContent.trim();
+        
+        // Title from video title element
+        titleEl = document.querySelector('ytd-video-title');
+        if(titleEl) return titleEl.textContent.trim();
+        
+        // Any h1 on page
+        titleEl = document.querySelector('h1');
+        if(titleEl) return titleEl.textContent.trim();
+        
+        // Shorts specific
+        titleEl = document.querySelector('h3.title');
+        if(titleEl) return titleEl.textContent.trim();
+        
+        // Page title fallback
+        return document.title.split(' - ')[0].trim();
     } catch (e) { return null; }
 }
 
 function getYouTubeChannel() {
     try {
-        const channelEl = document.querySelector('#channel-name a, #owner-name a, ytd-channel-name a');
-        return channelEl ? channelEl.textContent.trim() : null;
+        // Most reliable - owner name link
+        let channelEl = document.querySelector('#owner-name a, #owner-name');
+        if(channelEl && channelEl.textContent.trim()) return channelEl.textContent.trim();
+        
+        // Channel link
+        channelEl = document.querySelector('#channel-name a, #channel-name');
+        if(channelEl && channelEl.textContent.trim()) return channelEl.textContent.trim();
+        
+        // YTD channel name
+        channelEl = document.querySelector('ytd-channel-name a');
+        if(channelEl && channelEl.textContent.trim()) return channelEl.textContent.trim();
+        
+        // Video owner
+        channelEl = document.querySelector('ytd-video-owner-renderer a');
+        if(channelEl && channelEl.textContent.trim()) return channelEl.textContent.trim();
+        
+        // Find channel links anywhere
+        const allLinks = document.querySelectorAll('a');
+        for(const link of allLinks){
+            const href = link.getAttribute('href') || '';
+            if(href.includes('/channel/') || href.includes('/@')){
+                if(link.textContent.trim() && link.textContent.trim().length < 50){
+                    return link.textContent.trim();
+                }
+            }
+        }
+        
+        return null;
     } catch (e) { return null; }
 }
 
@@ -1097,6 +1151,7 @@ const autoResumeCheckbox = document.getElementById("autoResume");
 const autoLoopCheckbox = document.getElementById("autoLoop");
 const showVideoInfoCheckbox = document.getElementById("showVideoInfo");
 const autoSkipAdCheckbox = document.getElementById("autoSkipAd");
+const autoApplySpeedCheckbox = document.getElementById("autoApplySpeed");
 const customUICheckbox = document.getElementById("customUI");
 const removeShortsCheckbox = document.getElementById("removeShorts");
 const removeSidebarCheckbox = document.getElementById("removeSidebar");
@@ -1152,6 +1207,14 @@ if(autoSkipAdCheckbox){
     autoSkipAdCheckbox.checked = settings.autoSkipAd !== false;
     autoSkipAdCheckbox.onchange = e => {
         settings.autoSkipAd = e.target.checked;
+        GM_setValue("settings", settings);
+    };
+}
+
+if(autoApplySpeedCheckbox){
+    autoApplySpeedCheckbox.checked = settings.autoApplySpeed !== false;
+    autoApplySpeedCheckbox.onchange = e => {
+        settings.autoApplySpeed = e.target.checked;
         GM_setValue("settings", settings);
     };
 }
@@ -1435,7 +1498,7 @@ document.addEventListener("keydown", e => {
         }
         e.preventDefault();
         const hk = {
-            key: e.key.length === 1 ? e.key.toUpperCase() : e.key,
+            key: e.key,
             ctrl: e.ctrlKey,
             alt: e.altKey,
             shift: e.shiftKey
@@ -1477,6 +1540,38 @@ document.addEventListener("keydown", e => {
         setTimeout(() => {
             panel.style.display = "none";
         }, 300);
+    }
+    
+    // Main hotkey toggle (case-sensitive)
+    const hotkey = settings.hotkey || "*";
+    const isModifier = e.ctrlKey || e.altKey || e.metaKey;
+    
+    // Handle special characters - allow shift for keys like * (Shift+8 on most keyboards)
+    let keyMatch = false;
+    if(hotkey.length === 1){
+        const hotkeyLower = hotkey.toLowerCase();
+        const keyLower = e.key.toLowerCase();
+        keyMatch = keyLower === hotkeyLower;
+    } else {
+        keyMatch = e.code === hotkey.toUpperCase();
+    }
+    
+    if(keyMatch && !isModifier && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA"){
+        e.preventDefault();
+        if(settings.autoVideo && !getVideo()){
+            panel.style.display = "none";
+            return;
+        }
+        if(panel.style.display === "none"){
+            panel.style.display = "block";
+            panel.style.animation = "fadeIn 0.3s ease";
+        } else {
+            panel.style.animation = "fadeOut 0.3s ease";
+            setTimeout(() => {
+                panel.style.display = "none";
+            }, 300);
+        }
+        applyVideo();
     }
 });
 
@@ -1776,7 +1871,7 @@ function detectVideoOnce(){
                 videoInfoInterval = setInterval(updateVideoInfo, 1000);
             }
             
-            if(v.readyState >= 2){
+            if(v.readyState >= 2 && settings.autoApplySpeed !== false){
                 applyVideo();
             }
         }
@@ -1848,6 +1943,7 @@ function initVideoDetection(){
     
     // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
     setInterval(() => {
+        if(settings.autoApplySpeed === false) return;
         const v = getVideo();
         if(v && v.readyState >= 2 && !v.paused){
             if(lastApplied.speed !== settings.speed || lastApplied.volume !== settings.volume){
@@ -1864,7 +1960,7 @@ function initEventListeners(){
         panel.style.top = clamp(parseInt(panel.style.top) || 0, 0, window.innerHeight - 120) + "px";
     });
     
-    window.addEventListener("unload", () => {
+    window.addEventListener("pagehide", () => {
         if(observer) observer.disconnect();
         if(lastVideo) cleanupAudioContext(lastVideo);
         if(videoInfoInterval) clearInterval(videoInfoInterval);
