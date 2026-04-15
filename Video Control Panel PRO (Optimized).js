@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      1.17
+// @version      17.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v1.17)
+// @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v17.1)
 // ==/UserScript==
 
 (function () {
@@ -28,7 +28,6 @@ const settings = GM_getValue("settings", {
     autoLoop: true,
     autoSkipAd: true,
     showVideoInfo: true,
-    autoApplySpeed: true,
     hotkey: "*",
     posX: 60,
     posY: 60,
@@ -49,7 +48,7 @@ const settings = GM_getValue("settings", {
 });
 
 // ===== UPDATE CHECKING =====
-const CURRENT_VERSION = "1.17";
+const CURRENT_VERSION = "17.1";
 const UPDATE_URL = "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js";
 
 function checkForUpdates(){
@@ -397,7 +396,6 @@ panel.innerHTML = `
             <label><input type="checkbox" id="autoResume"> ⏯️ Resume</label>
             <label><input type="checkbox" id="showVideoInfo"> 📺 Info</label>
             <label><input type="checkbox" id="autoSkipAd"> ⏭️ Skip Ad</label>
-            <label><input type="checkbox" id="autoApplySpeed"> ⚡ Auto Speed</label>
         </div>
     </div>
 
@@ -835,10 +833,41 @@ let lastAdDetected = false;
 
 function skipAd() {
     if (!settings.autoSkipAd) return;
-
-    const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, [class*="skip-button"], .videoAdSkipButton');
+    
+    // Only run on YouTube
+    if (!window.location.hostname.includes('youtube.com')) return;
+    
+    const v = getVideo();
+    
+    // Find skip button
+    const skipBtn = document.querySelector('.ytp-ad-skip-button') || 
+                    document.querySelector('.ytp-ad-skip-button-modern') || 
+                    document.querySelector('.ytp-skip-ad-button') ||
+                    document.querySelector('[class*="skip-button"]') ||
+                    document.querySelector('.videoAdSkipButton');
+    
+    // Check for short ad indicator
+    const shortAdMsg = document.querySelector('.video-ads.ytp-ad-module .ytp-ad-player-overlay') || 
+                       document.querySelector('.ytp-ad-button-icon');
+    
+    // Mute when ad is showing
+    if((skipBtn || shortAdMsg) && v){
+        v.muted = true;
+    }
+    
     if (skipBtn) {
         console.log("Skipping ad...");
+        const delayTime = 0.5;
+        
+        // Force skip if video time is past delay
+        if(v && v.currentTime > delayTime){
+            v.currentTime = v.duration;
+            console.log("Force skipped ad (time jump)");
+            lastAdDetected = true;
+            setTimeout(() => applyVideo(), 500);
+            return;
+        }
+        
         skipBtn.click();
         lastAdDetected = true;
         setTimeout(() => {
@@ -847,6 +876,25 @@ function skipAd() {
         }, 500);
         return;
     }
+    
+    // Force skip when ad is playing but no skip button
+    if (shortAdMsg && v && v.duration) {
+        v.currentTime = v.duration;
+        console.log("Force skipped ad (no button)");
+        lastAdDetected = true;
+        setTimeout(() => applyVideo(), 500);
+        return;
+    }
+    
+    // Close overlay ads
+    const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
+    if (adOverlay) {
+        lastAdDetected = true;
+        adOverlay.click();
+        setTimeout(() => applyVideo(), 500);
+        return;
+    }
+}
 
     const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
     if (adOverlay) {
@@ -1151,7 +1199,6 @@ const autoResumeCheckbox = document.getElementById("autoResume");
 const autoLoopCheckbox = document.getElementById("autoLoop");
 const showVideoInfoCheckbox = document.getElementById("showVideoInfo");
 const autoSkipAdCheckbox = document.getElementById("autoSkipAd");
-const autoApplySpeedCheckbox = document.getElementById("autoApplySpeed");
 const customUICheckbox = document.getElementById("customUI");
 const removeShortsCheckbox = document.getElementById("removeShorts");
 const removeSidebarCheckbox = document.getElementById("removeSidebar");
@@ -1207,14 +1254,6 @@ if(autoSkipAdCheckbox){
     autoSkipAdCheckbox.checked = settings.autoSkipAd !== false;
     autoSkipAdCheckbox.onchange = e => {
         settings.autoSkipAd = e.target.checked;
-        GM_setValue("settings", settings);
-    };
-}
-
-if(autoApplySpeedCheckbox){
-    autoApplySpeedCheckbox.checked = settings.autoApplySpeed !== false;
-    autoApplySpeedCheckbox.onchange = e => {
-        settings.autoApplySpeed = e.target.checked;
         GM_setValue("settings", settings);
     };
 }
@@ -1871,7 +1910,7 @@ function detectVideoOnce(){
                 videoInfoInterval = setInterval(updateVideoInfo, 1000);
             }
             
-            if(v.readyState >= 2 && settings.autoApplySpeed !== false){
+            if(v.readyState >= 2){
                 applyVideo();
             }
         }
@@ -1943,7 +1982,6 @@ function initVideoDetection(){
     
     // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
     setInterval(() => {
-        if(settings.autoApplySpeed === false) return;
         const v = getVideo();
         if(v && v.readyState >= 2 && !v.paused){
             if(lastApplied.speed !== settings.speed || lastApplied.volume !== settings.volume){
