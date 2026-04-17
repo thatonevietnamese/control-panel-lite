@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -618,56 +618,41 @@ if(loopCheck){
     }
 }
 
-// ===== TOGGLE HOTKEY =====
-const HOTKEY = settings.hotkey && settings.hotkey.trim() ? settings.hotkey.trim() : "*";
-
+// ===== TOGGLE HOTKEY (ONLY *) =====
 document.addEventListener("keydown", e => {
+    // Ignore when typing
     const tag = e.target.tagName;
-    
-    // Escape always hides panel
-    if(e.key === "Escape" && isPanelVisible){
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+    // Escape để tắt panel (giữ lại cái này vì tiện)
+    if (e.key === "Escape" && isPanelVisible) {
         isPanelVisible = false;
         panel.style.display = "none";
         return;
     }
-    
-    // Ignore other keys if typing in input
-    if(tag === "INPUT" || tag === "TEXTAREA"){
-        return;
-    }
-    
-    const isModifier = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
-    
-    // Toggle panel with hotkey (exact match for single char, code for special keys)
-    let hotkeyMatch = false;
-    if(HOTKEY.length === 1){
-        hotkeyMatch = e.key === HOTKEY;
-    } else {
-        hotkeyMatch = e.code === HOTKEY.toUpperCase();
-    }
-    
-    if(hotkeyMatch && !isModifier){
+
+    // Chỉ xử lý đúng phím "*"
+    if (e.key === "*") {
         e.preventDefault();
-        
+
         const v = getVideo();
-        if(settings.autoVideo && !v){
-            isPanelVisible = false;
+        if (settings.autoVideo && !v) {
             panel.style.display = "none";
+            isPanelVisible = false;
             return;
         }
-        
+
         isPanelVisible = !isPanelVisible;
         panel.style.display = isPanelVisible ? "block" : "none";
-        
-        if(isPanelVisible){
+
+        if (isPanelVisible) {
             volInput.focus();
             volInput.select();
         }
     }
 });
-
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "2.1";
+const CURRENT_VERSION = "2.2";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
