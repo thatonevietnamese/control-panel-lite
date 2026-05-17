@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -23,7 +23,6 @@ const settings = GM_getValue("settings", {
     color: "#2b5797",
     autoVideo: true,
     autoLoop: true,
-    hotkey: "*",
     lastUpdateCheck: 0
 });
 
@@ -33,6 +32,9 @@ let observer = null;
 let isPanelVisible = false;
 let audioContextSupported = true;
 const audioContexts = new WeakMap();
+
+// ===== VERSION =====
+const CURRENT_VERSION = "2.1";
 
 // ===== CONFLICT CHECK =====
 function checkConflict() {
@@ -74,17 +76,17 @@ function clamp(val, min, max){
 function getVideo(){
     try {
         const videos = document.querySelectorAll("video");
-        // Prioritize playing video
+        // FIX: Prioritize playing video with readyState check instead of offsetParent
         for (const v of videos) {
-            if (v.offsetParent !== null && !v.paused && v.duration > 0) return v;
+            if (!v.paused && v.readyState >= 2) return v;
         }
-        // Fallback: video with duration
+        // Fallback: video with duration loaded
         for (const v of videos) {
-            if (v.offsetParent !== null && v.duration > 0) return v;
+            if (v.duration > 0 && v.readyState >= 2) return v;
         }
-        // Fallback: any visible video
+        // Fallback: any video with data
         for (const v of videos) {
-            if (v.offsetParent !== null) return v;
+            if (v.readyState > 0) return v;
         }
     } catch (e) {
         console.error("Error in getVideo:", e);
@@ -97,11 +99,12 @@ function cleanupAudioContext(video){
     if(audioContexts.has(video)){
         const audioData = audioContexts.get(video);
         try {
-            if(audioData.ctx && audioData.ctx.state !== 'closed'){
-                audioData.ctx.close().catch(() => {});
+            // FIX: Disconnect gain node properly
+            if(audioData.gain){
+                audioData.gain.disconnect();
             }
         } catch(e) {
-            console.warn("Error closing AudioContext:", e);
+            console.warn("Error disconnecting nodes:", e);
         }
         audioContexts.delete(video);
         console.log("Audio context cleaned up for video");
@@ -124,9 +127,7 @@ function getOrCreateGainNode(video){
         const isSameOrigin = testLink.origin === window.location.origin;
         
         if(!isSameOrigin && !video.getAttribute('crossOrigin')){
-            // Try to detect if CORS is allowed
             if(video.readyState >= 1){
-                // May work with crossOrigin attribute
                 console.log("Cross-origin video detected, trying audio boost");
             } else {
                 console.log("Cross-origin video without CORS, audio boost disabled");
@@ -146,6 +147,7 @@ function getOrCreateGainNode(video){
     }
     
     try {
+        // Create new AudioContext for each video (required due to MediaElementSource limitation)
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
         // Check if we can createMediaElementSource
@@ -153,19 +155,9 @@ function getOrCreateGainNode(video){
         try {
             source = audioCtx.createMediaElementSource(video);
         } catch(sourceError){
-            // This video's media pipeline is already connected
-            // Try to find existing gain node workaround
             console.log("MediaElementSource already connected:", sourceError.message);
-            
-            // Check if we can work without reconnecting
-            if(audioCtx.state === 'suspended'){
-                audioCtx.resume().catch(() => {});
-            }
-            
-            // Use Web Audio API to connect to destination anyway
-            const data = { ctx: audioCtx, gain: audioCtx.createGain(), sourceConnected: false };
-            audioContexts.set(video, data);
-            return data;
+            audioCtx.close().catch(() => {});
+            return null;
         }
         
         const gainNode = audioCtx.createGain();
@@ -176,6 +168,7 @@ function getOrCreateGainNode(video){
             gainNode.connect(audioCtx.destination);
         } catch(connectError){
             console.warn("Audio connection failed:", connectError.message);
+            audioCtx.close().catch(() => {});
             return null;
         }
         
@@ -232,8 +225,8 @@ function forceLoop() {
     if (!settings.autoLoop) return;
 
     const v = getVideo();
-    if (!v) return;
-
+    if (!v || v.paused) return;
+    
     if (v.ended || (v.currentTime >= v.duration - 0.5 && v.duration > 0)) {
         console.log("Force looping video...");
         v.currentTime = 0;
@@ -386,17 +379,19 @@ function init(){
     
     initDetection();
     
-    console.log("Video Control Panel LITE v1.3.7 initialized");
+    console.log("Video Control Panel LITE v" + CURRENT_VERSION + " initialized");
 }
 
 // ===== AUTO SHOW/HIDE =====
 function detectVideo(){
     const v = getVideo();
-    const videoSrc = v ? (v.src || v.currentSrc || '') : '';
-    const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
+    
+    // FIX: Also detect when video changes even if same element (YouTube MediaSource changes)
+    // Check if it's a different video element OR same video with changed playback state
+    const videoChanged = v !== lastVideo;
     
     // Detect new video or src change (e.g., after skip ad)
-    if(v !== lastVideo || videoSrc !== lastSrc){
+    if(videoChanged){
         // Cleanup previous video audio context
         if(lastVideo){
             cleanupAudioContext(lastVideo);
@@ -469,6 +464,25 @@ function initDetection(){
                         }
                     }
                 }
+                // FIX: Check for removed nodes to cleanup audio context
+                if(mut.removedNodes.length > 0){
+                    for(const node of mut.removedNodes){
+                        if(node === lastVideo){
+                            cleanupAudioContext(lastVideo);
+                            lastVideo = null;
+                        } else if(node.querySelector && node.querySelector("video")){
+                            // Check if the removed node contains the current video
+                            const videos = node.querySelectorAll ? node.querySelectorAll("video") : [];
+                            for(const vid of videos){
+                                if(vid === lastVideo){
+                                    cleanupAudioContext(lastVideo);
+                                    lastVideo = null;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
         observer.observe(document.body, {childList: true, subtree: true});
@@ -478,14 +492,18 @@ function initDetection(){
     
     // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
     setInterval(() => {
+        if(document.hidden) return;
+        
         const v = getVideo();
-        if(v && v.readyState >= 2 && !v.paused){
-            if(v.playbackRate !== settings.speed || v.volume !== Math.min(settings.volume, 1)){
-                applyVolume();
-                applySpeed();
-            }
-        }
+        if(!v || v.paused) return;
+        
+        // FIX: Always sync video to settings instead of conditional check
+        applyVolume();
+        applySpeed();
     }, 2000);
+    
+    // FIX: Polling for YouTube/src changes that don't trigger events
+    setInterval(detectVideo, 1000);
 }
 
 // ===== VOLUME INPUT =====
@@ -618,41 +636,55 @@ if(loopCheck){
     }
 }
 
-// ===== TOGGLE HOTKEY (ONLY *) =====
-document.addEventListener("keydown", e => {
-    // Ignore when typing
-    const tag = e.target.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA") return;
+// ===== TOGGLE HOTKEY =====
+const HOTKEY = "*";
 
-    // Escape để tắt panel (giữ lại cái này vì tiện)
-    if (e.key === "Escape" && isPanelVisible) {
+document.addEventListener("keydown", e => {
+    const tag = e.target.tagName;
+    
+    // Escape always hides panel
+    if(e.key === "Escape" && isPanelVisible){
         isPanelVisible = false;
         panel.style.display = "none";
         return;
     }
-
-    // Chỉ xử lý đúng phím "*"
-    if (e.key === "*") {
+    
+    // Ignore other keys if typing in input
+    if(tag === "INPUT" || tag === "TEXTAREA"){
+        return;
+    }
+    
+    const isModifier = e.ctrlKey || e.altKey || e.metaKey;
+    
+    // Toggle panel with hotkey (exact match for single char, code for special keys)
+    let hotkeyMatch = false;
+    if(HOTKEY.length === 1){
+        hotkeyMatch = e.key === HOTKEY;
+    } else {
+        hotkeyMatch = e.code === HOTKEY.toUpperCase();
+    }
+    
+    if(hotkeyMatch && !isModifier){
         e.preventDefault();
-
+        
         const v = getVideo();
-        if (settings.autoVideo && !v) {
-            panel.style.display = "none";
+        if(settings.autoVideo && !v){
             isPanelVisible = false;
+            panel.style.display = "none";
             return;
         }
-
+        
         isPanelVisible = !isPanelVisible;
         panel.style.display = isPanelVisible ? "block" : "none";
-
-        if (isPanelVisible) {
+        
+        if(isPanelVisible){
             volInput.focus();
             volInput.select();
         }
     }
 });
+
 // ===== AUTO UPDATE CHECK =====
-const CURRENT_VERSION = "2.2";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
@@ -678,7 +710,7 @@ function checkForUpdates(){
                 }
             },
             onerror: function() {
-                settings.lastUpdateCheck = now;
+                // Don't update lastUpdateCheck on failure, allow retry on next visit
             }
         });
     } catch(e) {
@@ -721,6 +753,7 @@ function showUpdateNotification(newVersion) {
 window.addEventListener("pagehide", () => {
     if(observer) observer.disconnect();
     if(lastVideo) cleanupAudioContext(lastVideo);
+    if(loopInterval) clearInterval(loopInterval);
 });
 
 // ===== START =====
