@@ -155,23 +155,31 @@ let observer = null;
 let isApplying = false;
 let videoInfoInterval = null;
 let audioContextSupported = true;
+let globalAudioCtx = null;
 
 window.autoResumeEnabled = () => settings.autoResume;
 
 // ===== AUDIO BOOST =====
-const audioContexts = new WeakMap();
+const audioNodes = new WeakMap();
+
+function getAudioContext(){
+    if(!globalAudioCtx){
+        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return globalAudioCtx;
+}
 
 function cleanupAudioContext(video){
-    if(audioContexts.has(video)){
-        const audioData = audioContexts.get(video);
+    if(audioNodes.has(video)){
+        const audioData = audioNodes.get(video);
         try {
-            if(audioData.ctx && audioData.ctx.state !== 'closed'){
-                audioData.ctx.close().catch(() => {});
+            if(audioData && audioData.gain && audioData.gain.context.state !== 'closed'){
+                audioData.gain.context.close().catch(() => {});
             }
         } catch(e) {
             console.warn("Error closing AudioContext:", e);
         }
-        audioContexts.delete(video);
+        audioNodes.delete(video);
         console.log("Audio context cleaned up for video");
     }
 }
@@ -183,30 +191,17 @@ function getOrCreateGainNode(video){
         return null;
     }
     
-    if(audioContexts.has(video)){
-        const audioData = audioContexts.get(video);
-        if(audioData.ctx.state === 'suspended'){
-            audioData.ctx.resume().catch(() => {});
+    if(audioNodes.has(video)){
+        const audioData = audioNodes.get(video);
+        if(audioData.gain.context.state === 'suspended'){
+            audioData.gain.context.resume().catch(() => {});
         }
         return audioData;
     }
     
     try {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        let source;
-        
-        try {
-            source = audioCtx.createMediaElementSource(video);
-        } catch(sourceError){
-            console.log("MediaElementSource already connected:", sourceError.message);
-            if(audioCtx.state === 'suspended'){
-                audioCtx.resume().catch(() => {});
-            }
-            const data = { ctx: audioCtx, gain: audioCtx.createGain(), sourceConnected: false };
-            audioContexts.set(video, data);
-            return data;
-        }
-        
+        const audioCtx = getAudioContext();
+        const source = audioCtx.createMediaElementSource(video);
         const gainNode = audioCtx.createGain();
         
         try {
@@ -218,7 +213,7 @@ function getOrCreateGainNode(video){
         }
         
         const data = { ctx: audioCtx, gain: gainNode, sourceConnected: true };
-        audioContexts.set(video, data);
+        audioNodes.set(video, data);
         
         if(audioCtx.state === 'suspended'){
             audioCtx.resume().catch(() => {});
@@ -227,7 +222,7 @@ function getOrCreateGainNode(video){
         console.log("Audio boost initialized for video");
         return data;
     } catch(e) {
-        audioContextSupported = false;
+        console.log("Audio boost not available:", e.message);
         return null;
     }
 }
@@ -242,6 +237,8 @@ function smoothGainTransition(gainNode, targetValue, duration = 0.1){
 }
 
 // ===== HELPERS =====
+let cachedVideo = null;
+
 function normalizeKey(key){
     if(!key) return "";
     // Keep special characters like *, +, - as-is, only remove spaces
@@ -253,20 +250,34 @@ function clamp(val, min, max){
 }
 
 function getVideo(){
+    if(cachedVideo && document.contains(cachedVideo)){
+        return cachedVideo;
+    }
+    cachedVideo = null;
+    
     try {
         const videos = document.querySelectorAll("video");
+        
+        // Primary: video is actively playing or ready
         for (const v of videos) {
-            if (v.offsetParent !== null && !v.paused && v.duration > 0) {
+            if (!v.paused && v.readyState >= 2) {
+                cachedVideo = v;
                 return v;
             }
         }
+        
+        // Fallback: video has loaded but is paused
         for (const v of videos) {
-            if (v.offsetParent !== null && v.duration > 0) {
+            if (v.readyState >= 2) {
+                cachedVideo = v;
                 return v;
             }
         }
+        
+        // Last fallback: any video with any data
         for (const v of videos) {
-            if (v.offsetParent !== null) {
+            if (v.readyState > 0) {
+                cachedVideo = v;
                 return v;
             }
         }
@@ -306,9 +317,11 @@ function applyVideo(){
         if(lastApplied.speed !== speed){
             requestAnimationFrame(() => {
                 v.playbackRate = speed;
+                isApplying = false;
             });
             lastApplied.speed = speed;
             console.log("Speed applied:", speed);
+            return;
         }
 
         if(lastApplied.volume !== volume){
@@ -317,6 +330,7 @@ function applyVideo(){
             if(volume <= 1){
                 requestAnimationFrame(() => {
                     v.volume = volume;
+                    isApplying = false;
                 });
                 if(audioData && audioData.gain) {
                     smoothGainTransition(audioData.gain, 1);
@@ -324,6 +338,7 @@ function applyVideo(){
             } else {
                 requestAnimationFrame(() => {
                     v.volume = 1;
+                    isApplying = false;
                 });
                 if(audioData && audioData.gain) {
                     smoothGainTransition(audioData.gain, volume);
@@ -334,6 +349,7 @@ function applyVideo(){
             
             lastApplied.volume = volume;
             console.log("Volume applied:", volume, "Audio boost:", volume > 1 ? "Yes" : "No");
+            return;
         }
     } catch(e) {
         console.error("Error in applyVideo:", e);
@@ -822,10 +838,13 @@ function updateVideoInfo() {
     `;
 }
 
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+function escapeHtml(str){
+    return String(str)
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#39;");
 }
 
 // ===== AUTO SKIP AD =====
@@ -1951,6 +1970,14 @@ function initVideoDetection(){
                            (node.querySelector && node.querySelector("video"))){
                             shouldCheck = true;
                             break;
+                        }
+                    }
+                }
+                if(mut.removedNodes.length > 0){
+                    for(const node of mut.removedNodes){
+                        if(node === lastVideo){
+                            cleanupAudioContext(lastVideo);
+                            lastVideo = null;
                         }
                     }
                 }
