@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.7
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -34,7 +34,7 @@ let audioContextSupported = true;
 const audioContexts = new WeakMap();
 
 // ===== VERSION =====
-const CURRENT_VERSION = "2.1";
+const CURRENT_VERSION = "2.7";
 
 // ===== CONFLICT CHECK =====
 function checkConflict() {
