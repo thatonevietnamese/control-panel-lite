@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      3.0
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v2.1)
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v3.0)
 // ==/UserScript==
 
 (function () {
@@ -33,8 +33,13 @@ let isPanelVisible = false;
 let audioContextSupported = true;
 const audioContexts = new WeakMap();
 
-// ===== VERSION =====
-const CURRENT_VERSION = "2.7";
+// ===== CONSTANTS (hoisted declarations — must be before any function that uses them) =====
+const CURRENT_VERSION = "3.0";
+const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const HOTKEY = "*";
+const LOOP_TIMING_TOLERANCE   = 0.5;   // s  — proximity to end to trigger loop
+const GAIN_TRANSITION_DURATION = 0.1;  // s  — fade duration when changing gain
+const DETECT_POLL_INTERVAL    = 1000;  // ms — SPA fallback: how often to poll for new <video>
 
 // ===== CONFLICT CHECK =====
 function checkConflict() {
@@ -76,17 +81,17 @@ function clamp(val, min, max){
 function getVideo(){
     try {
         const videos = document.querySelectorAll("video");
-        // FIX: Prioritize playing video with readyState check instead of offsetParent
+        // Prioritize playing video
         for (const v of videos) {
-            if (!v.paused && v.readyState >= 2) return v;
+            if (v.offsetParent !== null && !v.paused && v.duration > 0) return v;
         }
-        // Fallback: video with duration loaded
+        // Fallback: video with duration
         for (const v of videos) {
-            if (v.duration > 0 && v.readyState >= 2) return v;
+            if (v.offsetParent !== null && v.duration > 0) return v;
         }
-        // Fallback: any video with data
+        // Fallback: any visible video
         for (const v of videos) {
-            if (v.readyState > 0) return v;
+            if (v.offsetParent !== null) return v;
         }
     } catch (e) {
         console.error("Error in getVideo:", e);
@@ -99,12 +104,11 @@ function cleanupAudioContext(video){
     if(audioContexts.has(video)){
         const audioData = audioContexts.get(video);
         try {
-            // FIX: Disconnect gain node properly
-            if(audioData.gain){
-                audioData.gain.disconnect();
+            if(audioData.ctx && audioData.ctx.state !== 'closed'){
+                audioData.ctx.close().catch(() => {});
             }
         } catch(e) {
-            console.warn("Error disconnecting nodes:", e);
+            console.warn("Error closing AudioContext:", e);
         }
         audioContexts.delete(video);
         console.log("Audio context cleaned up for video");
@@ -127,7 +131,9 @@ function getOrCreateGainNode(video){
         const isSameOrigin = testLink.origin === window.location.origin;
         
         if(!isSameOrigin && !video.getAttribute('crossOrigin')){
+            // Try to detect if CORS is allowed
             if(video.readyState >= 1){
+                // May work with crossOrigin attribute
                 console.log("Cross-origin video detected, trying audio boost");
             } else {
                 console.log("Cross-origin video without CORS, audio boost disabled");
@@ -147,7 +153,6 @@ function getOrCreateGainNode(video){
     }
     
     try {
-        // Create new AudioContext for each video (required due to MediaElementSource limitation)
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
         // Check if we can createMediaElementSource
@@ -155,7 +160,11 @@ function getOrCreateGainNode(video){
         try {
             source = audioCtx.createMediaElementSource(video);
         } catch(sourceError){
+            // This video is already wired to an AudioContext owned by the player
+            // itself (YouTube, Vimeo, etc.).  We cannot inject a second one here,
+            // so close the orphaned context and signal the caller by returning null.
             console.log("MediaElementSource already connected:", sourceError.message);
+            console.log("Audio boost unavailable for this video — using native video.volume");
             audioCtx.close().catch(() => {});
             return null;
         }
@@ -168,7 +177,7 @@ function getOrCreateGainNode(video){
             gainNode.connect(audioCtx.destination);
         } catch(connectError){
             console.warn("Audio connection failed:", connectError.message);
-            audioCtx.close().catch(() => {});
+            audioCtx.close().catch(() => {}); // FIX: Close leaked AudioContext
             return null;
         }
         
@@ -182,12 +191,13 @@ function getOrCreateGainNode(video){
         console.log("Audio boost initialized for video");
         return data;
     } catch(e) {
-        audioContextSupported = false;
+        // Don't set global flag - a single video failure shouldn't disable all future videos
+        console.warn("Audio boost failed for this video:", e.message);
         return null;
     }
 }
 
-function smoothGainTransition(gainNode, targetValue, duration = 0.1){
+function smoothGainTransition(gainNode, targetValue, duration = GAIN_TRANSITION_DURATION){
     if(!gainNode) return;
     try {
         const currentTime = gainNode.context.currentTime;
@@ -198,24 +208,12 @@ function smoothGainTransition(gainNode, targetValue, duration = 0.1){
     }
 }
 
-function applyVolume(){
-    const v = getVideo();
-    if(!v) return;
-
-    const vol = clamp(settings.volume, 0, 5);
-    const audioData = getOrCreateGainNode(v);
-    
-    if(vol <= 1){
-        v.volume = vol;
-        if(audioData && audioData.gain) smoothGainTransition(audioData.gain, 1);
-    } else {
-        v.volume = 1;
-        if(audioData && audioData.gain) smoothGainTransition(audioData.gain, vol);
-    }
+function applyVolume(optVideo){
+    applyVolumeToVideo(clamp(settings.volume, 0, 5), optVideo);
 }
 
-function applySpeed(){
-    const v = getVideo();
+function applySpeed(optVideo){
+    const v = optVideo || getVideo();
     if(!v) return;
     v.playbackRate = clamp(settings.speed, 0.1, 16);
 }
@@ -225,9 +223,9 @@ function forceLoop() {
     if (!settings.autoLoop) return;
 
     const v = getVideo();
-    if (!v || v.paused) return;
-    
-    if (v.ended || (v.currentTime >= v.duration - 0.5 && v.duration > 0)) {
+    if (!v) return;
+
+    if (v.ended || (v.currentTime >= v.duration - LOOP_TIMING_TOLERANCE && v.duration > 0)) {
         console.log("Force looping video...");
         v.currentTime = 0;
         v.play().catch(e => console.warn("Play failed:", e));
@@ -385,23 +383,32 @@ function init(){
 // ===== AUTO SHOW/HIDE =====
 function detectVideo(){
     const v = getVideo();
-    
-    // FIX: Also detect when video changes even if same element (YouTube MediaSource changes)
-    // Check if it's a different video element OR same video with changed playback state
-    const videoChanged = v !== lastVideo;
+    const videoSrc = v ? (v.src || v.currentSrc || '') : '';
+    const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
     
     // Detect new video or src change (e.g., after skip ad)
-    if(videoChanged){
+    if(v !== lastVideo || videoSrc !== lastSrc){
         // Cleanup previous video audio context
+        // ── Race condition guard ────────────────────────────────────────────
+        // detectVideo() may be called re-entrantly (two rapid mutations fire
+        // before the first call finishes).  Both calls reach this block with
+        // the same lastVideo reference.  The second call sees lastVideo === null
+        // (already cleared by the first), so the outer if() is skipped.
+        // Meanwhile onVideoEnded may have already fired (once:true removed the
+        // listener) before we get here — removeEventListener is always safe as a
+        // no-op on an absent listener, so no try/catch needed.
         if(lastVideo){
             cleanupAudioContext(lastVideo);
             lastVideo.removeEventListener('ended', onVideoEnded);
+            lastVideo = null; // cleared BEFORE reassigning below; prevents any re-entrant detectVideo() from double-cleaning
         }
         
         lastVideo = v;
         
         if(v){
-            v.addEventListener('ended', onVideoEnded);
+            // FIX: Use { once: true } so listener is auto-removed after execution,
+            // preventing N listeners piling up across src mutations on the same element
+            v.addEventListener('ended', onVideoEnded, { once: true });
             
             if(settings.autoVideo){
                 isPanelVisible = true;
@@ -409,8 +416,8 @@ function detectVideo(){
             }
             
             // Apply settings to new video (including after ad skip)
-            applyVolume();
-            applySpeed();
+            applyVolume(v);                              // ← pass v — no extra DOM scan
+            applySpeed(v);                               // ← pass v — no extra DOM scan
         } else if(settings.autoVideo){
             isPanelVisible = false;
             panel.style.display = "none";
@@ -450,7 +457,8 @@ function initDetection(){
         if(e.target.tagName === "VIDEO") detectVideo();
     }, true);
 
-    // Initialize MutationObserver safely
+    // ===== MUTATION OBSERVER (no polling!) =====
+    // Tracks added OR removed video nodes - removal triggers audio context cleanup
     try {
         if(observer) observer.disconnect();
         observer = new MutationObserver(mutations => {
@@ -464,22 +472,12 @@ function initDetection(){
                         }
                     }
                 }
-                // FIX: Check for removed nodes to cleanup audio context
                 if(mut.removedNodes.length > 0){
                     for(const node of mut.removedNodes){
-                        if(node === lastVideo){
+                        if(node === lastVideo || 
+                           (node.querySelector && node.querySelector("video") === lastVideo)){
                             cleanupAudioContext(lastVideo);
                             lastVideo = null;
-                        } else if(node.querySelector && node.querySelector("video")){
-                            // Check if the removed node contains the current video
-                            const videos = node.querySelectorAll ? node.querySelectorAll("video") : [];
-                            for(const vid of videos){
-                                if(vid === lastVideo){
-                                    cleanupAudioContext(lastVideo);
-                                    lastVideo = null;
-                                    break;
-                                }
-                            }
                         }
                     }
                 }
@@ -489,21 +487,11 @@ function initDetection(){
     } catch(e) {
         console.warn("MutationObserver not available:", e);
     }
-    
-    // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
-    setInterval(() => {
-        if(document.hidden) return;
-        
-        const v = getVideo();
-        if(!v || v.paused) return;
-        
-        // FIX: Always sync video to settings instead of conditional check
-        applyVolume();
-        applySpeed();
-    }, 2000);
-    
-    // FIX: Polling for YouTube/src changes that don't trigger events
-    setInterval(detectVideo, 1000);
+
+    // Polling fallback — MutationObserver may miss SPA navigations
+    // (YouTube, Twitter/X and similar sites replace <video> without DOM mutations)
+    // This cheap 1 s interval is a last-resort safety net, not the primary mechanism.
+    setInterval(detectVideo, DETECT_POLL_INTERVAL);
 }
 
 // ===== VOLUME INPUT =====
@@ -517,7 +505,6 @@ function updateVolUI(val){
 }
 
 function setVolume(val, save = true){
-    const v = getVideo();
     val = clamp(parseFloat(val) || 0, 0, 5);
     
     if(save){
@@ -527,16 +514,8 @@ function setVolume(val, save = true){
     
     updateVolUI(val);
     
-    if(v){
-        const audioData = getOrCreateGainNode(v);
-        if(val <= 1){
-            v.volume = val;
-            if(audioData && audioData.gain) smoothGainTransition(audioData.gain, 1);
-        } else {
-            v.volume = 1;
-            if(audioData && audioData.gain) smoothGainTransition(audioData.gain, val);
-        }
-    }
+    // Delegate actual video/gain application to the single source of truth
+    applyVolumeToVideo(val);
 }
 
 // Volume input - change saves to settings, input is live preview
@@ -561,9 +540,13 @@ volSlider.addEventListener("change", () => {
     setVolume(volSlider.value, true);
 });
 
-// Unified function to apply volume to video
-function applyVolumeToVideo(val){
-    const v = getVideo();
+// Unified function: accepts an optional video reference so callers in detectVideo()
+// can pass the freshly-retrieved object directly, avoiding a redundant DOM scan
+// that can return a stale element in SPAs (YouTube, Twitter/X, TikTok).
+function applyVolumeToVideo(val, optVideo){
+    // optVideo: optional — if provided, use it directly; otherwise fall back to DOM scan
+    // (avoids stale element lookups during SPA navigation hot-paths)
+    const v = optVideo || getVideo();
     if(!v) return;
     
     const audioData = getOrCreateGainNode(v);
@@ -572,8 +555,28 @@ function applyVolumeToVideo(val){
         if(audioData && audioData.gain) smoothGainTransition(audioData.gain, 1);
     } else {
         v.volume = 1;
-        if(audioData && audioData.gain) smoothGainTransition(audioData.gain, val);
+        // If audioData is null, the gain pipeline couldn't be set up (cross-origin
+        // video, player already owns the AudioContext, etc.).  Keep native volume = 1;
+        // the slider will show the higher value but the actual audio won't go above 1.
+        if(audioData && audioData.gain){
+            smoothGainTransition(audioData.gain, val);
+        } else {
+            // Show a gentle one-time warning so the user knows why boost isn't active
+            showBoosterUnavailableWarning();
+        }
     }
+}
+
+function showBoosterUnavailableWarning(){
+    // Avoid flooding the console / screen — warn at most once per page visit
+    if(showBoosterUnavailableWarning._shown) return;
+    showBoosterUnavailableWarning._shown = true;
+    console.warn(
+        "⚠ Audio boost unavailable for this video.\n" +
+        "   Cause: cross-origin video, protective CORS, or the page's own player\n" +
+        "   already owns the AudioContext. Audio volume will be capped at 1×.\n" +
+        "   Try lowering the volume slider below 1 for native volume control."
+    );
 }
 
 // ===== SPEED BUTTONS =====
@@ -619,7 +622,12 @@ function toggleLoop() {
     }
     GM_setValue("settings", settings);
     
-    if(settings.autoLoop && !loopInterval){
+    if(settings.autoLoop){
+        // Clear any stale interval first — prevents duplicate timers after toggle/re-init
+        if(loopInterval){
+            clearInterval(loopInterval);
+            loopInterval = null;
+        }
         loopInterval = setInterval(forceLoop, 500);
     } else if(!settings.autoLoop && loopInterval){
         clearInterval(loopInterval);
@@ -631,14 +639,15 @@ if(loopCheck){
     updateLoopState();
     loopCheck.addEventListener("change", toggleLoop);
     
+    // Use toggleLoop() instead of creating a raw interval directly —
+    // toggleLoop() always clears any existing interval first, so there is
+    // no risk of ending up with two concurrent forceLoop() timers.
     if(settings.autoLoop){
-        loopInterval = setInterval(forceLoop, 500);
+        toggleLoop();              // ← goes through the single, guarded path
     }
 }
 
 // ===== TOGGLE HOTKEY =====
-const HOTKEY = "*";
-
 document.addEventListener("keydown", e => {
     const tag = e.target.tagName;
     
@@ -654,7 +663,7 @@ document.addEventListener("keydown", e => {
         return;
     }
     
-    const isModifier = e.ctrlKey || e.altKey || e.metaKey;
+    const isModifier = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
     
     // Toggle panel with hotkey (exact match for single char, code for special keys)
     let hotkeyMatch = false;
@@ -685,7 +694,6 @@ document.addEventListener("keydown", e => {
 });
 
 // ===== AUTO UPDATE CHECK =====
-const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 function checkForUpdates(){
     const now = Date.now();
@@ -710,7 +718,7 @@ function checkForUpdates(){
                 }
             },
             onerror: function() {
-                // Don't update lastUpdateCheck on failure, allow retry on next visit
+                settings.lastUpdateCheck = now;
             }
         });
     } catch(e) {
