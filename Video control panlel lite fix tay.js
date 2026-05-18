@@ -106,6 +106,39 @@ const audioContexts = new WeakMap();
 const processedVideos = new WeakSet();
 let audioContextSupported = !!(window.AudioContext || window.webkitAudioContext);
 
+// Fallback khi boost fail - thiết lập volume trực tiếp
+function applyFallbackVolume(video, desiredVolume) {
+    if(!video) return;
+    video.volume = Math.min(1, desiredVolume);
+    console.log("Fallback volume applied:", video.volume);
+}
+
+// Attach audio boost to video (dùng cho re-hook)
+function attachAudioBoost(video) {
+    if(!video) return;
+
+    // Cleanup cũ trước
+    if(audioContexts.has(video)) {
+        const audioData = audioContexts.get(video);
+        try {
+            if(audioData.ctx && audioData.ctx.state !== 'closed') {
+                audioData.ctx.close().catch(() => {});
+            }
+        } catch(e) {}
+        audioContexts.delete(video);
+        processedVideos.delete(video);
+    }
+
+    // Thử tạo gain node mới
+    const audioData = getOrCreateGainNode(video);
+    if(audioData) {
+        smoothGainTransition(audioData.gain, clamp(settings.volume, 0, 5));
+    } else {
+        // Fallback khi CORS hoặc lỗi
+        applyFallbackVolume(video, settings.volume);
+    }
+}
+
 // Cleanup khi video reload / đổi source
 function cleanupAudioContext(video){
     if(audioContexts.has(video)){
@@ -416,7 +449,13 @@ function detectVideo(){
     const v = getVideo();
     const videoSrc = v ? (v.src || v.currentSrc || '') : '';
     const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
-    
+
+    // Re-hook video liên tục
+    if(v && v !== window._lastVideo){
+        window._lastVideo = v;
+        attachAudioBoost(v);
+    }
+
     // Detect new video or src change (e.g., after skip ad)
     if(v !== lastVideo || videoSrc !== lastSrc){
         // Cleanup previous video audio context
@@ -467,62 +506,54 @@ function initDetection(){
     } else {
         window.addEventListener("load", detectVideo);
     }
-    
+
     document.addEventListener("visibilitychange", () => {
         if(!document.hidden) detectVideo();
     });
-    
+
     document.addEventListener("play", e => {
         if(e.target.tagName === "VIDEO") detectVideo();
     }, true);
-    
+
     document.addEventListener("playing", e => {
         if(e.target.tagName === "VIDEO") detectVideo();
     }, true);
-    
+
     document.addEventListener("loadstart", e => {
         if(e.target.tagName === "VIDEO") detectVideo();
     }, true);
-    
+
     document.addEventListener("durationchange", e => {
         if(e.target.tagName === "VIDEO") detectVideo();
     }, true);
 
-    // ===== MUTATION OBSERVER (no polling!) =====
-    // Tracks added OR removed video nodes - removal triggers audio context cleanup
+    // ===== CÁCH 2: MutationObserver cho YouTube Shorts =====
     try {
         if(observer) observer.disconnect();
-        observer = new MutationObserver(mutations => {
-            for(const mut of mutations){
-                if(mut.addedNodes.length > 0){
-                    for(const node of mut.addedNodes){
-                        if(node.nodeName === "VIDEO" || 
-                           (node.querySelector && node.querySelector("video"))){
-                            detectVideo();
-                            return;
-                        }
-                    }
-                }
-                if(mut.removedNodes.length > 0){
-                    for(const node of mut.removedNodes){
-                        if(node === lastVideo || 
-                           (node.querySelector && node.querySelector("video") === lastVideo)){
-                            cleanupAudioContext(lastVideo);
-                            lastVideo = null;
-                        }
-                    }
-                }
+        observer = new MutationObserver(() => {
+            const video = document.querySelector("video");
+            if(video && video !== window._lastVideo){
+                window._lastVideo = video;
+                attachAudioBoost(video);
             }
         });
-        observer.observe(document.body, {childList: true, subtree: true});
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
     } catch(e) {
         console.warn("MutationObserver not available:", e);
     }
 
-    // Polling fallback — MutationObserver may miss SPA navigations
-    // (YouTube, Twitter/X and similar sites replace <video> without DOM mutations)
-    // This cheap 1 s interval is a last-resort safety net, not the primary mechanism.
-    setInterval(detectVideo, DETECT_POLL_INTERVAL);
+    // ===== CÁCH 1: Re-hook video liên tục =====
+    setInterval(() => {
+        const video = document.querySelector("video");
+        if(video && video !== window._lastVideo){
+            window._lastVideo = video;
+            attachAudioBoost(video);
+        }
+    }, 1000);
 }
 
 // ===== VOLUME INPUT =====
