@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel PRO (Optimized)
 // @namespace    http://tampermonkey.net/
-// @version      20
+// @version      21
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20PRO%20(Optimized).js
 // @match        *://*/*
@@ -13,8 +13,35 @@
 // @description  Auto skip ads + Video info + Custom UI + size/position controls + settings UI v2 (v17.1)
 // ==/UserScript==
 
+// ── global guard (stops re-declaration on re-inject / HMR / extension reload) ──
+if (window.__videoPanelLoaded) {
+    console.log("Script already running, skip inject");
+    return;
+}
+Object.defineProperty(window, "__videoPanelLoaded", {
+    value: true,
+    writable: false,
+    configurable: false
+});
+
 (function () {
 'use strict';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SAFE PLAY HELPER  (Fix #2-B – prevents "play() interrupted by load()" error)
+// ═════════════════════════════════════════════════════════════════════════════
+function safePlay(video) {
+    if (!video) return;
+    setTimeout(() => {
+        try {
+            if (video.readyState >= 2) {
+                video.play().catch(e => console.log("Play blocked:", e.message));
+            }
+        } catch (e) {
+            console.log("Play blocked:", e.message);
+        }
+    }, 100);
+}
 
 // ===== SETTINGS =====
 const settings = GM_getValue("settings", {
@@ -155,74 +182,124 @@ let observer = null;
 let isApplying = false;
 let videoInfoInterval = null;
 let audioContextSupported = true;
-let globalAudioCtx = null;
 
 window.autoResumeEnabled = () => settings.autoResume;
 
 // ===== AUDIO BOOST =====
+// audioNodes[video] = { gain: GainNode, _ctx: AudioContext }
+// Each video gets its own AudioContext so that createMediaElementSource
+// never races with another video sharing the same context.
 const audioNodes = new WeakMap();
 
-function getAudioContext(){
-    if(!globalAudioCtx){
-        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    return globalAudioCtx;
-}
+// ── Fix 4: any user click resumes all suspended AudioContexts ─────────────
+document.addEventListener("click", () => {
+    try {
+        const videos = document.querySelectorAll("video");
+        videos.forEach(video => {
+            const data = audioNodes.get(video);
+            if (data && data._ctx && data._ctx.state === "suspended") {
+                data._ctx.resume().catch(() => {});
+            }
+        });
+    } catch (e) {}
+}, true);
 
 function cleanupAudioContext(video){
-    if(audioNodes.has(video)){
-        const audioData = audioNodes.get(video);
-        try {
-            if(audioData && audioData.gain && audioData.gain.context.state !== 'closed'){
-                audioData.gain.context.close().catch(() => {});
-            }
-        } catch(e) {
-            console.warn("Error closing AudioContext:", e);
-        }
-        audioNodes.delete(video);
-        console.log("Audio context cleaned up for video");
+    if(!video) return;
+    video._hasAudioSource = false;           // Fix 5: allow re-init after cleanup
+    const data = audioNodes.get(video);
+    if(!data || !data._ctx) return;
+    try {
+        if(data._ctx.state !== 'closed') data._ctx.close().catch(() => {});
+    } catch(e) {
+        console.warn("Error closing AudioContext:", e);
     }
+    audioNodes.delete(video);
+    console.log("Audio context cleaned up for video");
+}
+
+function showBoosterUnavailableWarning(){
+    // Avoid flooding the console / screen — warn at most once per page visit
+    if(showBoosterUnavailableWarning._shown) return;
+    showBoosterUnavailableWarning._shown = true;
+    console.warn(
+        "⚠ Audio boost unavailable for this video.\n" +
+        "   Cause: cross-origin video, protective CORS, or the page's own player\n" +
+        "   already owns the AudioContext. Audio volume will be capped at 1×.\n" +
+        "   Try lowering the volume slider below 1 for native volume control."
+    );
 }
 
 function getOrCreateGainNode(video){
     if(!audioContextSupported) return null;
-    
-    if(!video.src && !video.currentSrc){
+
+    if(!video.src && !video.currentSrc) return null;
+
+    // ── CORS pre-flight ────────────────────────────────────────────────────
+    try {
+        const testLink = document.createElement('a');
+        testLink.href = video.src || video.currentSrc;
+        const isSameOrigin = testLink.origin === window.location.origin;
+
+        if(!isSameOrigin && !video.getAttribute('crossOrigin')){
+            if(video.readyState === 0) {
+                console.log("Setting crossOrigin='anonymous' for cross-origin video");
+                video.crossOrigin = 'anonymous';
+            } else {
+                console.log("Cross-origin video detected (data already loaded), trying audio boost");
+            }
+        }
+    } catch(e) { /* can't determine origin; try anyway */ }
+
+    // ── Re-use existing gain node (Fix #2-A: one AudioContext per video) ───
+    if(audioNodes.has(video)){
+        const data = audioNodes.get(video);
+        if(data._ctx.state === 'suspended') data._ctx.resume().catch(() => {});
+        return data;
+    }
+
+    // ── Build fresh per-video AudioContext ─────────────────────────────────
+    // ── Fix 5: guard against double createMediaElementSource on same element ─
+    if (video._hasAudioSource) {
+        console.log("Video already has an audio source attached — skipping duplicate createMediaElementSource");
         return null;
     }
-    
-    if(audioNodes.has(video)){
-        const audioData = audioNodes.get(video);
-        if(audioData.gain.context.state === 'suspended'){
-            audioData.gain.context.resume().catch(() => {});
-        }
-        return audioData;
-    }
-    
+
     try {
-        const audioCtx = getAudioContext();
-        const source = audioCtx.createMediaElementSource(video);
-        const gainNode = audioCtx.createGain();
-        
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();          // every video → its own context
+        ctx.resume().catch(() => {});        // always resume immediately
+
+        let source;
         try {
-            source.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-        } catch(connectError){
-            console.warn("Audio connection failed:", connectError.message);
+            source = ctx.createMediaElementSource(video);   // (Fix #2-A: never reused)
+            video._hasAudioSource = true;                   // Fix 5: mark as wired
+        } catch(sourceError){
+            console.log("MediaElementSource already connected:", sourceError.message);
+            console.log("Audio boost unavailable for this video — using native video.volume");
+            showBoosterUnavailableWarning();
+            ctx.close().catch(() => {});     // no leaks
             return null;
         }
-        
-        const data = { ctx: audioCtx, gain: gainNode, sourceConnected: true };
-        audioNodes.set(video, data);
-        
-        if(audioCtx.state === 'suspended'){
-            audioCtx.resume().catch(() => {});
+
+        const gainNode = ctx.createGain();
+
+        try {
+            source.connect(gainNode);
+            gainNode.connect(ctx.destination);
+        } catch(connectError){
+            console.warn("Audio connection failed:", connectError.message);
+            ctx.close().catch(() => {});
+            return null;
         }
-        
-        console.log("Audio boost initialized for video");
+
+        const data = { gain: gainNode, _ctx: ctx, sourceConnected: true };
+        audioNodes.set(video, data);
+
+        console.log("Audio boost initialized for video (per-video AudioContext)");
         return data;
-    } catch(e) {
-        console.log("Audio boost not available:", e.message);
+    }catch(e) {
+        console.warn("Audio boost failed for this video:", e.message);
         return null;
     }
 }
@@ -315,42 +392,36 @@ function applyVideo(){
         const volume = clamp(settings.volume, 0, 5);
 
         if(lastApplied.speed !== speed){
-            requestAnimationFrame(() => {
-                v.playbackRate = speed;
-                isApplying = false;
-            });
+            requestAnimationFrame(() => { v.playbackRate = speed; });
             lastApplied.speed = speed;
             console.log("Speed applied:", speed);
+            isApplying = false;
             return;
         }
 
         if(lastApplied.volume !== volume){
             const audioData = getOrCreateGainNode(v);
-            
+
             if(volume <= 1){
-                requestAnimationFrame(() => {
-                    v.volume = volume;
-                    isApplying = false;
-                });
+                requestAnimationFrame(() => { v.volume = volume; });
                 if(audioData && audioData.gain) {
                     smoothGainTransition(audioData.gain, 1);
                 }
             } else {
-                requestAnimationFrame(() => {
-                    v.volume = 1;
-                    isApplying = false;
-                });
+                requestAnimationFrame(() => { v.volume = 1; });
                 if(audioData && audioData.gain) {
                     smoothGainTransition(audioData.gain, volume);
                 } else {
-                    console.warn("Audio boost not available, volume limited to 1x");
+                    showBoosterUnavailableWarning();
                 }
             }
-            
+
             lastApplied.volume = volume;
+            isApplying = false;
             console.log("Volume applied:", volume, "Audio boost:", volume > 1 ? "Yes" : "No");
             return;
         }
+        isApplying = false;
     } catch(e) {
         console.error("Error in applyVideo:", e);
     } finally {
@@ -889,10 +960,7 @@ function skipAd() {
         
         skipBtn.click();
         lastAdDetected = true;
-        setTimeout(() => {
-            console.log("Ad skipped, re-applying speed...");
-            applyVideo();
-        }, 500);
+        setTimeout(() => applyVideo(), 500);
         return;
     }
     
@@ -911,17 +979,6 @@ function skipAd() {
         lastAdDetected = true;
         adOverlay.click();
         setTimeout(() => applyVideo(), 500);
-        return;
-    }
-}
-
-    const adOverlay = document.querySelector('.ytp-ad-overlay-close-button, .ytp-ad-overlay-slot');
-    if (adOverlay) {
-        lastAdDetected = true;
-        adOverlay.click();
-        setTimeout(() => {
-            applyVideo();
-        }, 500);
         return;
     }
 
@@ -1184,16 +1241,16 @@ function applyVideoToVolume(vol) {
         if(audioData && audioData.gain) {
             smoothGainTransition(audioData.gain, 1);
         }
-    } else {
-        requestAnimationFrame(() => {
-            v.volume = 1;
-        });
-        if(audioData && audioData.gain) {
-            smoothGainTransition(audioData.gain, vol);
-        } else {
-            console.warn("Audio boost not available, volume limited to 1x");
-        }
-    }
+            } else {
+                requestAnimationFrame(() => {
+                    v.volume = 1;
+                });
+                if(audioData && audioData.gain) {
+                    smoothGainTransition(audioData.gain, vol);
+                } else {
+                    showBoosterUnavailableWarning();
+                }
+            }
     console.log("Volume preview:", vol, "Audio boost:", vol > 1 ? "Yes" : "No");
 }
 
