@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE fix tay
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      4
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js
 // @match        *://*/*
@@ -32,7 +32,7 @@ let observer = null;
 let isPanelVisible = false;
 
 // ===== CONSTANTS (hoisted declarations — must be before any function that uses them) =====
-const CURRENT_VERSION = "3.0";
+const CURRENT_VERSION = "4";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const HOTKEY = "*";
 const LOOP_TIMING_TOLERANCE   = 0.5;   // s  — proximity to end to trigger loop
