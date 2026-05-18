@@ -2,8 +2,8 @@
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
 // @version      3.0
-// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
-// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
