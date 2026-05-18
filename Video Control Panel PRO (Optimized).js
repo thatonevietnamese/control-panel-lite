@@ -183,6 +183,9 @@ let isApplying = false;
 let videoInfoInterval = null;
 let audioContextSupported = true;
 
+// Track video for re-hooking (for Shorts)
+let _v = null;
+
 window.autoResumeEnabled = () => settings.autoResume;
 
 // ===== AUDIO BOOST =====
@@ -228,6 +231,26 @@ function showBoosterUnavailableWarning(){
         "   already owns the AudioContext. Audio volume will be capped at 1×.\n" +
         "   Try lowering the volume slider below 1 for native volume control."
     );
+}
+
+// Attach audio boost to video (dùng cho re-hook)
+function attachAudioBoost(video) {
+    if(!video) return;
+
+    // Check if already processed
+    if(audioNodes.has(video)) {
+        console.log("Video already has audio boost attached");
+        return;
+    }
+
+    const audioData = getOrCreateGainNode(video);
+    if(audioData) {
+        console.log("Audio boost attached to video");
+    } else {
+        // Fallback khi CORS - set volume directly
+        video.volume = Math.min(1, settings.volume);
+        console.log("Audio boost not available, using native volume");
+    }
 }
 
 function getOrCreateGainNode(video){
@@ -1994,12 +2017,18 @@ function detectVideoOnce(){
 }
 
 function initVideoDetection(){
+    // Shorts detection
+    const isShorts = location.pathname.startsWith("/shorts/");
+    if(isShorts){
+        console.log("YouTube Shorts detected - enabling aggressive detection");
+    }
+
     if(document.readyState === "complete"){
         detectVideoOnce();
     } else {
         window.addEventListener("load", detectVideoOnce);
     }
-    
+
     document.addEventListener("play", e => {
         if(e.target.tagName === "VIDEO") detectVideoOnce();
     }, true);
@@ -2023,7 +2052,7 @@ function initVideoDetection(){
             for(const mut of mutations){
                 if(mut.addedNodes.length > 0){
                     for(const node of mut.addedNodes){
-                        if(node.nodeName === "VIDEO" || 
+                        if(node.nodeName === "VIDEO" ||
                            (node.querySelector && node.querySelector("video"))){
                             shouldCheck = true;
                             break;
@@ -2063,7 +2092,7 @@ function initVideoDetection(){
     if(settings.autoLoop){
         setInterval(forceLoop, 500);
     }
-    
+
     // Periodic check to ensure settings are applied (fallback for ad-skip scenarios)
     setInterval(() => {
         const v = getVideo();
@@ -2073,6 +2102,24 @@ function initVideoDetection(){
             }
         }
     }, 2000);
+
+    // ===== CÁCH 1: Re-hook video liên tục mỗi 500ms =====
+    setInterval(() => {
+        const v = document.querySelector("video");
+        if(v && v !== lastVideo){
+            lastVideo = v;
+            attachAudioBoost(v);
+        }
+    }, 500);
+
+    // ===== CÁCH 2: MutationObserver cho Shorts (bắt đúng lúc Shorts đổi video) =====
+    setInterval(() => {
+        const v = document.querySelector("video");
+        if(v && v !== window._v){
+            window._v = v;
+            attachAudioBoost(v);
+        }
+    }, 500);
 }
 
 // ===== EVENT LISTENERS =====
