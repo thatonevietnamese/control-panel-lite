@@ -30,8 +30,6 @@ const settings = GM_getValue("settings", {
 let lastVideo = null;
 let observer = null;
 let isPanelVisible = false;
-let audioContextSupported = true;
-const audioContexts = new WeakMap();
 
 // ===== CONSTANTS (hoisted declarations — must be before any function that uses them) =====
 const CURRENT_VERSION = "3.0";
@@ -219,18 +217,6 @@ function smoothGainTransition(gainNode, target, duration = 0.1){
         gainNode.gain.setValueAtTime(gainNode.gain.value, now);
         gainNode.gain.linearRampToValueAtTime(target, now + duration);
     } catch(e){}
-}
-
-// Apply volume (boost)
-function applyVolumeToVideo(volume, video){
-    const data = getOrCreateGainNode(video);
-
-    if(data && data.gain){
-        smoothGainTransition(data.gain, volume);
-    } else {
-        // 🔥 fallback nếu không inject được
-        video.volume = Math.min(volume, 1);
-    }
 }
 
 // Public API
