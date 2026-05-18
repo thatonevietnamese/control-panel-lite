@@ -124,20 +124,22 @@ function getOrCreateGainNode(video){
         return null;
     }
     
-    // Check same-origin
+    // Check same-origin and handle CORS
     try {
         const testLink = document.createElement('a');
         testLink.href = video.src || video.currentSrc;
         const isSameOrigin = testLink.origin === window.location.origin;
         
         if(!isSameOrigin && !video.getAttribute('crossOrigin')){
-            // Try to detect if CORS is allowed
-            if(video.readyState >= 1){
-                // May work with crossOrigin attribute
-                console.log("Cross-origin video detected, trying audio boost");
+            // Try to enable CORS by setting crossOrigin attribute
+            // Only do this if we haven't loaded any data yet to avoid potential reload issues
+            if(video.readyState === 0) {
+                console.log("Setting crossOrigin='anonymous' for cross-origin video");
+                video.crossOrigin = 'anonymous';
             } else {
-                console.log("Cross-origin video without CORS, audio boost disabled");
-                return null;
+                // For videos that have already loaded data, we'll try anyway
+                // Some servers may still allow access even after data loading began
+                console.log("Cross-origin video detected (data already loaded), trying audio boost");
             }
         }
     } catch(e) {
