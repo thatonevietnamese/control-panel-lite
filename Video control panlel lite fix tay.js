@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Video Control Panel LITE
+// @name         Video Control Panel LITE fix tay
 // @namespace    http://tampermonkey.net/
 // @version      3.0
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js
@@ -737,7 +737,7 @@ function checkForUpdates(){
     try {
         GM_xmlhttpRequest({
             method: "GET",
-            url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js",
+            url: "https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20control%20panlel%20lite%20fix%20tay.js",
             onload: function(response) {
                 if(response.status === 200){
                     const match = response.responseText.match(/@version\s+([\d.]+)/);
