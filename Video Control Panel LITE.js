@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Video Control Panel LITE
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
@@ -34,7 +34,7 @@ let audioContextSupported = true;
 const audioContexts = new WeakMap();
 
 // ===== CONSTANTS (hoisted declarations — must be before any function that uses them) =====
-const CURRENT_VERSION = "3.0";
+const CURRENT_VERSION = "3.1";
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const HOTKEY = "*";
 const LOOP_TIMING_TOLERANCE   = 0.5;   // s  — proximity to end to trigger loop
