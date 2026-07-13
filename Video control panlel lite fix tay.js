@@ -10,7 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
-// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v3.1 - Fix Shorts & Video Crash)
+// @description  Panel điều khiển âm thanh video - nhẹ và mượt (v3.2 - Fixed Parameters & Loops)
 // ==/UserScript==
 
 (function () {
@@ -32,11 +32,11 @@ let observer = null;
 let isPanelVisible = false;
 
 // ===== CONSTANTS =====
-const CURRENT_VERSION = "3.1";
+const CURRENT_VERSION = "3.2"; // Đã đồng bộ với @version tránh loop thông báo update
 const UPDATE_INTERVAL = 24 * 60 * 60 * 1000;
 const HOTKEY = "*";
 const LOOP_TIMING_TOLERANCE   = 0.5;
-const DETECT_POLL_INTERVAL    = 800; // Tăng tốc độ phản hồi một chút cho Shorts
+const DETECT_POLL_INTERVAL    = 800; 
 
 // ===== CONFLICT CHECK =====
 function checkConflict() {
@@ -74,7 +74,6 @@ function clamp(val, min, max){
 function getVideo(){
     try {
         const videos = document.querySelectorAll("video");
-        // Ưu tiên video đang phát (Rất quan trọng với Shorts vì thuật toán Shorts giữ nhiều thẻ video ẩn)
         for (const v of videos) {
             if (v.offsetParent !== null && !v.paused && v.duration > 0) return v;
         }
@@ -90,15 +89,13 @@ function getVideo(){
     return null;
 }
 
-// ===== AUDIO BOOST CORE (RE-ARCHITECTED FOR SPA/SHORTS) =====
+// ===== AUDIO BOOST CORE =====
 const audioContexts = new WeakMap();
 let audioContextSupported = !!(window.AudioContext || window.webkitAudioContext);
 
 function getOrCreateGainNode(video){
     if(!audioContextSupported || !video) return null;
 
-    // Nếu video này ĐÃ TỪNG được tạo rãnh âm thanh, tái sử dụng hoàn toàn node cũ
-    // KHÔNG giải phóng (cleanup) khi đổi src để tránh lỗi sập video / mất nguồn cấp.
     if(audioContexts.has(video)){
         const data = audioContexts.get(video);
         if(data.ctx && data.ctx.state === 'suspended'){
@@ -107,7 +104,6 @@ function getOrCreateGainNode(video){
         return data;
     }
 
-    // Kiểm tra xem video đã sẵn sàng nhận AudioContext chưa
     if(!video.src && !video.currentSrc && video.readyState < 1){
         return null;
     }
@@ -120,7 +116,6 @@ function getOrCreateGainNode(video){
         try {
             source = audioCtx.createMediaElementSource(video);
         } catch(err){
-            // Nếu trình phát của trang web (như YT) đã chiếm dụng trước luồng Element
             audioCtx.close().catch(()=>{});
             return null;
         }
@@ -136,7 +131,6 @@ function getOrCreateGainNode(video){
             audioCtx.resume().catch(()=>{});
         }
 
-        // Fix lỗi video Shorts tự động mute ngầm khi can thiệp AudioContext
         if(video.muted && settings.volume > 0){
             video.muted = false;
         }
@@ -161,15 +155,17 @@ function applyVolume(video){
     const v = video || getVideo();
     if(!v) return;
     applyVolumeToVideo(clamp(settings.volume, 0, 5), v);
+    updateVolUI(settings.volume); // Đồng bộ hiển thị lên giao diện
 }
 
 function applySpeed(video){
     const v = video || getVideo();
     if(!v) return;
     v.playbackRate = clamp(settings.speed, 0.1, 16);
+    updateSpeedButtons(settings.speed);
 }
 
-// ===== FORCE LOOP =====
+// ===== FORCE LOOP (Sử dụng trực tiếp event thay vì tạo setInterval vô tội vạ) =====
 let isLooping = false;
 function forceLoop() {
     if (!settings.autoLoop || isLooping) return;
@@ -260,7 +256,6 @@ function detectVideo(){
     const videoSrc = v.src || v.currentSrc || '';
     const lastSrc = lastVideo ? (lastVideo.src || lastVideo.currentSrc || '') : '';
     
-    // Nếu đổi sang video hoàn toàn mới hoặc đổi SRC (rất phổ biến trên Shorts/SPA)
     if(v !== lastVideo || videoSrc !== lastSrc){
         lastVideo = v;
         
@@ -269,7 +264,6 @@ function detectVideo(){
             panel.style.display = "block";
         }
         
-        // Thực thi cấu hình âm lượng / tốc độ tức thì lên video mới
         applyVolume(v);
         applySpeed(v);
     }
@@ -287,15 +281,16 @@ function initDetection(){
         if(!document.hidden) detectVideo();
     });
     
-    // Bắt chặt các sự kiện thay đổi trạng thái của Media Element trên trang SPA
-    const events = ["play", "playing", "loadstart", "durationchange", "loadeddata"];
+    const events = ["play", "playing", "loadstart", "durationchange", "loadeddata", "timeupdate"]; // Thêm timeupdate để bắt loop nhạy hơn
     events.forEach(evt => {
         document.addEventListener(evt, e => {
-            if(e.target.tagName === "VIDEO") detectVideo();
+            if(e.target.tagName === "VIDEO") {
+                detectVideo();
+                if(evt === "timeupdate" && settings.autoLoop) forceLoop();
+            }
         }, true);
     });
 
-    // MUTATION OBSERVER
     try {
         if(observer) observer.disconnect();
         observer = new MutationObserver(mutations => {
@@ -315,7 +310,6 @@ function initDetection(){
         console.warn("MutationObserver error:", e);
     }
 
-    // Polling fallback khẩn cấp cho cơ chế cuộn mượt (Seamless Slider) của YouTube Shorts
     setInterval(detectVideo, DETECT_POLL_INTERVAL);
 }
 
@@ -360,9 +354,11 @@ function applyVolumeToVideo(val, optVideo){
     const audioData = getOrCreateGainNode(v);
     if(val <= 1){
         v.volume = val;
+        // FIX: Truyền chính xác audioData.gain thay vì cục audioData
         if(audioData && audioData.gain) smoothGainTransition(audioData.gain, 1);
     } else {
         v.volume = 1;
+        // FIX: Truyền chính xác audioData.gain thay vì cục audioData
         if(audioData && audioData.gain){
             smoothGainTransition(audioData.gain, val);
         } else {
@@ -391,10 +387,8 @@ speedBtns.forEach(btn => {
         settings.speed = speed;
         GM_setValue("settings", settings);
         applySpeed();
-        updateSpeedButtons(speed);
     });
 });
-updateSpeedButtons(settings.speed);
 
 // ===== CLOSE BUTTON =====
 panel.querySelector("#vcp-close").addEventListener("click", () => {
@@ -404,24 +398,15 @@ panel.querySelector("#vcp-close").addEventListener("click", () => {
 
 // ===== LOOP TOGGLE =====
 const loopCheck = panel.querySelector("#vcp-loop-check");
-let loopInterval = null;
 
 function toggleLoop() {
     if(loopCheck) settings.autoLoop = loopCheck.checked;
     GM_setValue("settings", settings);
-    
-    if(loopInterval) {
-        clearInterval(loopInterval);
-        loopInterval = null;
-    }
-    if(settings.autoLoop){
-        loopInterval = setInterval(forceLoop, 500);
-    }
+    if(settings.autoLoop) forceLoop();
 }
 
 if(loopCheck){
     loopCheck.addEventListener("change", toggleLoop);
-    if(settings.autoLoop) toggleLoop();
 }
 
 // ===== TOGGLE HOTKEY =====
