@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name         YouTube ADB - CORE LITE (Fixed - No RAM Leak)
+// @name         YouTube ADB - CORE LITE (Cá Nhân)
 // @namespace    https://github.com/thatonevietnamese/youtube-adb-lite
-// @version      1.1
-// @description  Cốt lõi diệt quảng cáo YouTube - Đã fix lỗi tràn RAM và sập UI.
+// @version      1.2
+// @description  Cốt lõi diệt quảng cáo YouTube
 // @match        *://*.youtube.com/*
-// @exclude      *://accounts.youtube.com/*
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
 // @grant        none
-// @run-at       document-start
 // ==/UserScript==
 
 (function() {
