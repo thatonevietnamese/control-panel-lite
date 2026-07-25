@@ -3,6 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      4.6
 // @match        *://*/*
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/youtube-adb-lite/main/youtube-adb-core.user.js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/youtube-adb-lite/main/youtube-adb-core.user.js
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
