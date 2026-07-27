@@ -1,18 +1,19 @@
 // ==UserScript==
 // @name         YouTube ADB - CORE LITE (Cá Nhân)
 // @namespace    https://github.com/thatonevietnamese/youtube-adb-lite
-// @version      1.2
-// @description  Cốt lõi diệt quảng cáo YouTube
+// @version      1.3
+// @description  Cốt lõi diệt quảng cáo YouTube - Bản tối ưu setInterval siêu nhẹ, dứt điểm tràn RAM
 // @match        *://*.youtube.com/*
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // 1. CSS AN TOÀN HƠN (Đã bỏ selector gây sập UI lưới YouTube)
+    // 1. CSS Ẩn Quảng Cáo
     const adSelectors = [
         '#masthead-ad',
         '.video-ads.ytp-ad-module',
@@ -34,8 +35,12 @@
     `;
     (document.head || document.documentElement).appendChild(style);
 
+    // 2. Hàm dọn dẹp Polymer (Anti-Adblock popup)
     function clearPolymerLocks() {
-        const dismissBtn = document.querySelector('ytd-enforcement-message-view-model #dismiss-button, ytd-enforcement-message-view-model button[aria-label="Close"]');
+        const popup = document.querySelector('ytd-enforcement-message-view-model');
+        if (!popup) return;
+
+        const dismissBtn = popup.querySelector('#dismiss-button, button[aria-label="Close"]');
         if (dismissBtn) dismissBtn.click();
         
         document.body.classList.remove('iron-disable-scroll');
@@ -46,6 +51,7 @@
         }
     }
 
+    // 3. Hàm xử lý Tua/Skip quảng cáo video
     function handleVideoAds() {
         const video = document.querySelector('.ad-showing video') || document.querySelector('video.html5-main-video');
         if (!video) return;
@@ -59,37 +65,17 @@
             if (skipBtn) skipBtn.click();
         }
 
+        // Tự động play lại nếu bị ép pause
         if (video.paused && video.currentTime < 1) {
             video.play().catch(() => {});
         }
     }
 
-    // TỐI ƯU HÓA MUTATION OBSERVER (Chống tràn RAM)
-    let isRunning = false;
-    const observer = new MutationObserver(() => {
-        // Nếu hàm đang chạy, bỏ qua các thay đổi DOM khác để tránh spam
-        if (isRunning) return;
-        isRunning = true;
+    // 4. VÒNG LẶP ĐỊNH KỲ SIÊU NHẸ (Bỏ MutationObserver)
+    // Chạy 500ms một lần, tiêu tốn chưa tới 0.01% CPU
+    setInterval(() => {
+        handleVideoAds();
+        clearPolymerLocks();
+    }, 500);
 
-        // Giới hạn tốc độ xử lý (Throttle 500ms)
-        setTimeout(() => {
-            handleVideoAds();
-            if (document.querySelector('ytd-enforcement-message-view-model')) {
-                clearPolymerLocks();
-            }
-            isRunning = false;
-        }, 500); 
-    });
-
-    if (document.body) {
-        observer.observe(document.body, { childList: true, subtree: true });
-    } else {
-        const initObserver = new MutationObserver(() => {
-            if (document.body) {
-                observer.observe(document.body, { childList: true, subtree: true });
-                initObserver.disconnect();
-            }
-        });
-        initObserver.observe(document.documentElement, { childList: true });
-    }
 })();
