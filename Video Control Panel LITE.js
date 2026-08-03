@@ -15,10 +15,11 @@
 'use strict';
 
 // ===== SETTINGS CACHE =====
-const settings = GM_getValue("vcp_settings", { vol: 1, spd: 1, loop: true, forceResume: false, q: "auto" });
-let activeVid = null;
+// Thêm tuỳ chọn enableBoost (mặc định false để không tự động ép Web Audio API gây lỗi mất tiếng)
+const settings = GM_getValue("vcp_settings", { vol: 1, spd: 1, loop: false, forceResume: false, q: "auto", enableBoost: false });
+let activeMedia = null;
 let panelVisible = false;
-let volLock = false; // Flag chống lặp vô hạn khi khóa âm lượng
+let volLock = false; 
 const isYouTube = location.hostname.includes("youtube.com");
 
 // ===== ANTI-PAUSE (FORCE RESUME) KERNEL =====
@@ -30,14 +31,14 @@ window.addEventListener('visibilitychange', e => e.stopImmediatePropagation(), t
 const audioCtxMap = new WeakMap();
 const hasAudioCtx = !!(window.AudioContext || window.webkitAudioContext);
 
-function applyMediaSettings(v) {
-    if(!v || volLock) return;
+function applyMediaSettings(m) {
+    if(!m || volLock) return;
     
     // 1. Áp dụng tốc độ phát
-    v.playbackRate = settings.spd;
+    m.playbackRate = settings.spd;
     
-    // 2. Ép độ phân giải độc quyền cho YouTube
-    if (isYouTube) {
+    // 2. Ép độ phân giải độc quyền cho YouTube (chỉ áp dụng nếu là Video)
+    if (isYouTube && m.tagName === "VIDEO") {
         try {
             const player = document.getElementById("movie_player");
             if (player && typeof player.setPlaybackQualityRange === "function") {
@@ -47,85 +48,106 @@ function applyMediaSettings(v) {
         } catch(e){}
     }
 
-    // 3. Xử lý Khuyếch đại âm thanh x5 bọc trong lõi Lock
-    if(!hasAudioCtx) return;
-    let data = audioCtxMap.get(v);
-    if (!data) {
-        if (!v.src && !v.currentSrc) return;
-        try {
-            const Ctx = window.AudioContext || window.webkitAudioContext;
-            const ctx = new Ctx();
-            const source = ctx.createMediaElementSource(v);
-            const gain = ctx.createGain();
-            source.connect(gain);
-            gain.connect(ctx.destination);
-            data = { ctx, gain };
-            audioCtxMap.set(v, data);
-        } catch(e) { return; }
+    // 3. Khởi tạo AudioContext NẾU người dùng cho phép bật Boost
+    if(hasAudioCtx && settings.enableBoost) {
+        let data = audioCtxMap.get(m);
+        if (!data) {
+            // Chỉ khởi tạo khi Media đã có source
+            if (m.src || m.currentSrc) {
+                try {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    const ctx = new Ctx();
+                    const source = ctx.createMediaElementSource(m);
+                    const gain = ctx.createGain();
+                    source.connect(gain);
+                    gain.connect(ctx.destination);
+                    data = { ctx, gain };
+                    audioCtxMap.set(m, data);
+                } catch(e) {
+                    console.warn("VCP: Không thể khởi tạo AudioContext (Có thể do CORS)", e);
+                }
+            }
+        }
+        
+        // Cố gắng resume AudioContext nếu nó bị trình duyệt suspend
+        if (data && data.ctx.state === 'suspended') {
+            data.ctx.resume().catch(()=>{});
+        }
     }
-    
-    if (data.ctx.state === 'suspended') data.ctx.resume().catch(()=>{});
-    if (v.muted && settings.vol > 0) v.muted = false;
 
-    // Tiến hành khóa cứng Volume, chặn YouTube ghi đè
+    if (m.muted && settings.vol > 0) m.muted = false;
+
+    // 4. Áp dụng Âm lượng (Bọc trong volLock để chống vòng lặp vô hạn)
     volLock = true;
-    if (settings.vol <= 1) {
-        v.volume = settings.vol;
-        if(data.gain) data.gain.gain.value = 1;
+    let data = audioCtxMap.get(m);
+
+    if (settings.enableBoost && data) {
+        // Chế độ Boost Volume qua Web Audio API
+        if (settings.vol <= 1) {
+            m.volume = settings.vol;
+            if(data.gain) data.gain.gain.value = 1;
+        } else {
+            m.volume = 1; // Giữ volume gốc là 1 để tránh vỡ tiếng, phần dư đẩy cho GainNode
+            if(data.gain) {
+                try {
+                    data.gain.gain.setTargetAtTime(settings.vol, data.ctx.currentTime, 0.1);
+                } catch(e) { data.gain.gain.value = settings.vol; }
+            }
+        }
     } else {
-        v.volume = 1; // Giữ volume gốc là 1 để tránh vỡ tiếng
-        if(data.gain) {
-            try {
-                data.gain.gain.setValueAtTime(data.gain.gain.value, data.ctx.currentTime);
-                data.gain.gain.linearRampToValueAtTime(settings.vol, data.ctx.currentTime + 0.1);
-            } catch(e) { data.gain.gain.value = settings.vol; }
+        // Chế độ an toàn (Không Boost): Giới hạn volume hệ thống ở mức tối đa 1 (100%)
+        m.volume = Math.min(settings.vol, 1);
+        
+        // Nếu trước đó đã khởi tạo GainNode, reset nó về 1
+        if (data && data.gain) {
+            data.gain.gain.value = 1;
         }
     }
     volLock = false;
 }
 
 // ===== EVENT-DRIVEN KERNEL =====
-function setActiveVideo(v) {
-    if (!v) return;
+function setActiveMedia(m) {
+    if (!m) return;
     
     // Tháo và gán lại sự kiện loop chuẩn chỉ
-    if (v !== activeVid) {
-        if (activeVid) activeVid.removeEventListener("timeupdate", checkLoop);
-        activeVid = v;
-        activeVid.addEventListener("timeupdate", checkLoop);
+    if (m !== activeMedia) {
+        if (activeMedia) activeMedia.removeEventListener("timeupdate", checkLoop);
+        activeMedia = m;
+        activeMedia.addEventListener("timeupdate", checkLoop);
     }
     
-    applyMediaSettings(activeVid);
+    applyMediaSettings(activeMedia);
     if (!panelVisible) togglePanel(true);
 }
 
-// Bắt mọi sự kiện Play để nạp lại cấu hình (Trị bệnh đổi video SPA)
+// Bắt sự kiện Play cho cả VIDEO và AUDIO
 document.addEventListener("play", (e) => {
-    if (e.target.tagName === "VIDEO") {
-        setActiveVideo(e.target);
+    if (e.target.tagName === "VIDEO" || e.target.tagName === "AUDIO") {
+        setActiveMedia(e.target);
         if (settings.forceResume) e.target.play().catch(()=>{});
     }
 }, true);
 
 document.addEventListener("pause", (e) => {
-    if (settings.forceResume && e.target === activeVid && !e.target.ended) {
+    if (settings.forceResume && e.target === activeMedia && !e.target.ended) {
         e.preventDefault();
         e.target.play().catch(()=>{});
     }
 }, true);
 
-// Bắt sự kiện đổi volume của hệ thống/YouTube để đè ngược lại cấu hình của Script
+// Bắt sự kiện đổi volume của hệ thống/web để đè ngược lại cấu hình của Script
 document.addEventListener("volumechange", (e) => {
-    if (e.target.tagName === "VIDEO" && !volLock) {
+    if ((e.target.tagName === "VIDEO" || e.target.tagName === "AUDIO") && !volLock) {
         applyMediaSettings(e.target);
     }
 }, true);
 
 function checkLoop() {
-    if (!settings.loop || !activeVid) return;
-    if (activeVid.duration && activeVid.currentTime >= activeVid.duration - 0.3) {
-        activeVid.currentTime = 0;
-        activeVid.play().catch(()=>{});
+    if (!settings.loop || !activeMedia) return;
+    if (activeMedia.duration && activeMedia.currentTime >= activeMedia.duration - 0.3) {
+        activeMedia.currentTime = 0;
+        activeMedia.play().catch(()=>{});
     }
 }
 
@@ -152,6 +174,7 @@ panel.innerHTML = `
         <option value="hd1440">1440p</option>
         <option value="hd2160">4K</option>
     </select>
+    <label title="Kích hoạt Audio Boost (Tắt nếu video bị mất tiếng)"><input type="checkbox" id="vcp-boost" ${settings.enableBoost?'checked':''}><span>🚀</span></label>
     <label title="Auto Loop"><input type="checkbox" id="vcp-loop" ${settings.loop?'checked':''}><span>🔁</span></label>
     <label title="Force Resume (Anti-Pause)"><input type="checkbox" id="vcp-force" ${settings.forceResume?'checked':''}><span>⏯️</span></label>
     <button id="vcp-close">×</button>
@@ -170,7 +193,7 @@ GM_addStyle(`
 #vcp-panel input[type="checkbox"] { display:none; }
 #vcp-panel label span { opacity:0.4; font-size:15px; filter:grayscale(100%); }
 #vcp-panel input:checked + span { opacity:1; filter:grayscale(0%); }
-#vcp-close { background:none; border:none; color:#fff; font-size:18px; cursor:pointer; }
+#vcp-close { background:none; border:none; color:#fff; font-size:18px; cursor:pointer; padding-left: 5px; }
 `);
 
 document.documentElement.appendChild(panel);
@@ -181,6 +204,7 @@ const ui = {
     vol: panel.querySelector("#vcp-vol"),
     spdBtns: panel.querySelectorAll("#vcp-speed button"),
     quality: panel.querySelector("#vcp-quality"),
+    boost: panel.querySelector("#vcp-boost"),
     loop: panel.querySelector("#vcp-loop"),
     force: panel.querySelector("#vcp-force")
 };
@@ -191,7 +215,7 @@ function saveSettings() { GM_setValue("vcp_settings", settings); }
 
 function updateVolUI(v) {
     ui.slider.value = ui.vol.value = v;
-    ui.vol.classList.toggle("boost", v > 1);
+    ui.vol.classList.toggle("boost", v > 1 && settings.enableBoost);
 }
 
 function updateSpeedUI() {
@@ -201,18 +225,26 @@ function updateSpeedUI() {
 function handleVolChange(val) {
     settings.vol = Math.max(0, Math.min(5, parseFloat(val) || 0));
     updateVolUI(settings.vol);
-    if(activeVid) applyMediaSettings(activeVid);
+    if(activeMedia) applyMediaSettings(activeMedia);
     saveSettings();
 }
 
 ui.slider.oninput = e => handleVolChange(e.target.value);
 ui.vol.onchange = e => handleVolChange(e.target.value);
+
+ui.boost.onchange = e => {
+    settings.enableBoost = e.target.checked;
+    updateVolUI(settings.vol); // Cập nhật lại màu sắc số volume
+    if(activeMedia) applyMediaSettings(activeMedia);
+    saveSettings();
+};
+
 ui.loop.onchange = e => { settings.loop = e.target.checked; saveSettings(); };
 ui.force.onchange = e => { settings.forceResume = e.target.checked; saveSettings(); };
 
 ui.quality.onchange = e => {
     settings.q = e.target.value;
-    if(activeVid) applyMediaSettings(activeVid);
+    if(activeMedia) applyMediaSettings(activeMedia);
     saveSettings();
 };
 
@@ -220,7 +252,7 @@ ui.spdBtns.forEach(btn => {
     btn.onclick = () => {
         settings.spd = parseFloat(btn.dataset.s);
         updateSpeedUI();
-        if(activeVid) applyMediaSettings(activeVid);
+        if(activeMedia) applyMediaSettings(activeMedia);
         saveSettings();
     };
 });
@@ -241,13 +273,20 @@ document.addEventListener("keydown", e => {
     }
 });
 
+// Chạy khởi tạo ban đầu
 updateVolUI(settings.vol);
 updateSpeedUI();
 ui.quality.value = settings.q;
 
 setTimeout(() => {
-    const vids = document.getElementsByTagName("video");
-    for(let v of vids) { if(v.readyState > 0 && !v.paused) { setActiveVideo(v); break; } }
+    // Quét tìm cả video và audio elements
+    const mediaElements = document.querySelectorAll("video, audio");
+    for(let m of mediaElements) { 
+        if(m.readyState > 0 && !m.paused) { 
+            setActiveMedia(m); 
+            break; 
+        } 
+    }
 }, 1000);
 
 })();
