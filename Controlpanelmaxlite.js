@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Video/Audio Control Panel LITE v5.5 (Max Lite)
+// @name         Video/Audio Control Panel LITE v5.6 (Max Lite)
 // @namespace    http://tampermonkey.net/
-// @version      5.5
+// @version      5.6
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -52,12 +52,12 @@
     function applyMediaSettings(m, fromScriptUI = false) {
         if (!m || volLock || !document.contains(m)) return;
 
-        // 1. Áp dụng tốc độ phát (Hoạt động cho cả thẻ <video> và <audio>)
+        // 1. Áp dụng tốc độ phát
         try {
             const safeSpeed = Math.max(0.1, Math.min(5, settings.spd));
             if (m.playbackRate !== safeSpeed) {
                 m.playbackRate = safeSpeed;
-                m.defaultPlaybackRate = safeSpeed; // Ép tốc độ mặc định cho các file âm thanh có xu hướng reset
+                m.defaultPlaybackRate = safeSpeed;
             }
         } catch(e){}
 
@@ -142,7 +142,6 @@
         if (!panelVisible) togglePanel(true);
     }
 
-    // Bắt sự kiện play cho cả video và audio
     document.addEventListener("play", (e) => {
         const target = e.target;
         if (target && (target.tagName === "VIDEO" || target.tagName === "AUDIO")) setActiveMedia(target);
@@ -170,7 +169,6 @@
         }
     }, true);
 
-    // Đồng bộ Rate (Tốc độ) - Quản lý chặt trường hợp web tự reset speed của file audio
     document.addEventListener("ratechange", (e) => {
         const target = e.target;
         if ((target.tagName === "VIDEO" || target.tagName === "AUDIO") && target === activeMedia) {
@@ -214,10 +212,6 @@
         <label title="Kích hoạt Audio Boost (Tắt đi để trả quyền cho trình duyệt)"><input type="checkbox" id="vcp-boost" ${settings.enableBoost?'checked':''}><span>🚀</span></label>
         <label title="Auto Loop"><input type="checkbox" id="vcp-loop" ${settings.loop?'checked':''}><span>🔁</span></label>
         <label title="Force Resume (Anti-Pause)"><input type="checkbox" id="vcp-force" ${settings.forceResume?'checked':''}><span>⏯️</span></label>
-        <div id="vcp-download">
-            <button id="vcp-dl-mp4" title="Tải Video (MP4)">🎬 MP4</button>
-            <button id="vcp-dl-mp3" title="Tải Audio (MP3)">🎵 MP3</button>
-        </div>
         <button id="vcp-close">×</button>
     `;
 
@@ -233,9 +227,6 @@
     #vcp-spd-input { width:42px; padding:2px; border:1px solid #555; border-radius:5px; text-align:center; background:#333; color:#fff; font-size:12px; }
     #vcp-spd-input:disabled { opacity: 0.5; cursor: not-allowed; }
     #vcp-quality { background:#333; color:#fff; border:1px solid #555; border-radius:5px; padding:2px; font-size:11px; cursor:pointer; outline:none; }
-    #vcp-download { display:flex; gap:4px; }
-    #vcp-download button { padding:3px 6px; border:none; border-radius:5px; background:#333; color:#fff; cursor:pointer; font-size:11px; }
-    #vcp-download button:hover { background:#555; }
     #vcp-panel label { cursor:pointer; padding:0 3px; display:flex; align-items:center; }
     #vcp-panel input[type="checkbox"] { display:none; }
     #vcp-panel label span { opacity:0.4; font-size:15px; filter:grayscale(100%); transition:0.2s; }
@@ -260,9 +251,7 @@
         quality: panel.querySelector("#vcp-quality"),
         boost: panel.querySelector("#vcp-boost"),
         loop: panel.querySelector("#vcp-loop"),
-        force: panel.querySelector("#vcp-force"),
-        dlMp4: panel.querySelector("#vcp-dl-mp4"),
-        dlMp3: panel.querySelector("#vcp-dl-mp3")
+        force: panel.querySelector("#vcp-force")
     };
 
     if (!isYouTube) ui.quality.style.display = "none";
@@ -333,39 +322,7 @@
         if (activeMedia) applyMediaSettings(activeMedia, false);
     };
 
-    // --- TẢI XUỐNG ---
-    async function triggerDownload(isAudio) {
-        if (!activeMedia) { alert("⚠️ Không tìm thấy video/audio nào đang phát!"); return; }
-        const src = activeMedia.currentSrc || activeMedia.src;
-        if (!src) { alert("⚠️ Không lấy được liên kết nguồn media này!"); return; }
-        const format = isAudio ? "MP3" : "MP4";
-        if (!confirm(`❓ XÁC NHẬN TẢI XUỐNG:\n\nBạn có chắc chắn muốn tải tập tin dạng ${format} từ media này không?`)) return;
-
-        try {
-            const response = await fetch(src);
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `media_${Date.now()}.${format.toLowerCase()}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        } catch (e) {
-            const a = document.createElement("a");
-            a.href = src;
-            a.target = "_blank";
-            a.download = `media_${Date.now()}.${format.toLowerCase()}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
-    }
-
-    ui.dlMp4.onclick = () => triggerDownload(false);
-    ui.dlMp3.onclick = () => triggerDownload(true);
-
+    // Bật tắt Panel UI
     function togglePanel(show = !panelVisible) {
         panelVisible = show;
         panel.style.display = show ? "flex" : "none";
@@ -386,7 +343,7 @@
     updateVolUI(settings.vol);
     ui.quality.value = settings.q;
 
-    // Quét phát hiện Media (cả Video & Audio)
+    // Quét phát hiện Media liên tục (Tránh lỗi DOM chưa load)
     setInterval(() => {
         if (!activeMedia || activeMedia.paused || !document.contains(activeMedia)) {
             const mediaList = document.querySelectorAll("video, audio");
