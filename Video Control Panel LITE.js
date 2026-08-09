@@ -2,8 +2,8 @@
 // @name         Video/Audio Control Panel LITE v5.6 (Max Lite - Fixed Speed)
 // @namespace    http://tampermonkey.net/
 // @version      5.6.1
-// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
-// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
+// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
+// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Video%20Control%20Panel%20LITE.js
 // @match        *://*/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
