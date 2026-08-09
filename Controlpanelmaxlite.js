@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Video/Audio Control Panel LITE v5.6 (Max Lite)
+// @name         Video/Audio Control Panel LITE v5.5 (Max Lite)
 // @namespace    http://tampermonkey.net/
-// @version      5.6
+// @version      5.5
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -212,6 +212,10 @@
         <label title="Kích hoạt Audio Boost (Tắt đi để trả quyền cho trình duyệt)"><input type="checkbox" id="vcp-boost" ${settings.enableBoost?'checked':''}><span>🚀</span></label>
         <label title="Auto Loop"><input type="checkbox" id="vcp-loop" ${settings.loop?'checked':''}><span>🔁</span></label>
         <label title="Force Resume (Anti-Pause)"><input type="checkbox" id="vcp-force" ${settings.forceResume?'checked':''}><span>⏯️</span></label>
+        <div id="vcp-download">
+            <button id="vcp-dl-mp4" title="Tải Video (MP4 gốc)">🎬 MP4</button>
+            <button id="vcp-dl-mp3" title="Tải Audio (MP3 gốc)">🎵 MP3</button>
+        </div>
         <button id="vcp-close">×</button>
     `;
 
@@ -227,6 +231,9 @@
     #vcp-spd-input { width:42px; padding:2px; border:1px solid #555; border-radius:5px; text-align:center; background:#333; color:#fff; font-size:12px; }
     #vcp-spd-input:disabled { opacity: 0.5; cursor: not-allowed; }
     #vcp-quality { background:#333; color:#fff; border:1px solid #555; border-radius:5px; padding:2px; font-size:11px; cursor:pointer; outline:none; }
+    #vcp-download { display:flex; gap:4px; }
+    #vcp-download button { padding:3px 6px; border:none; border-radius:5px; background:#333; color:#fff; cursor:pointer; font-size:11px; }
+    #vcp-download button:hover { background:#555; }
     #vcp-panel label { cursor:pointer; padding:0 3px; display:flex; align-items:center; }
     #vcp-panel input[type="checkbox"] { display:none; }
     #vcp-panel label span { opacity:0.4; font-size:15px; filter:grayscale(100%); transition:0.2s; }
@@ -251,7 +258,9 @@
         quality: panel.querySelector("#vcp-quality"),
         boost: panel.querySelector("#vcp-boost"),
         loop: panel.querySelector("#vcp-loop"),
-        force: panel.querySelector("#vcp-force")
+        force: panel.querySelector("#vcp-force"),
+        dlMp4: panel.querySelector("#vcp-dl-mp4"),
+        dlMp3: panel.querySelector("#vcp-dl-mp3")
     };
 
     if (!isYouTube) ui.quality.style.display = "none";
@@ -321,6 +330,74 @@
         settings.spd = val;
         if (activeMedia) applyMediaSettings(activeMedia, false);
     };
+
+    // --- TẢI XUỐNG (Đã sửa Fallback tải chất lượng gốc) ---
+    async function triggerDownload(isAudio) {
+        if (!activeMedia) { alert("⚠️ Không tìm thấy video/audio nào đang phát!"); return; }
+        
+        const src = activeMedia.currentSrc || activeMedia.src;
+        const pageUrl = window.location.href;
+
+        // 1. YouTube & Blob (Mã hóa Stream)
+        if (isYouTube || (src && src.startsWith("blob:"))) {
+            const mediaType = isAudio ? "Âm thanh (MP3)" : "Video (MP4)";
+            if (confirm(`⚠️ Hệ thống phát hiện Video dạng luồng ẩn (Blob) hoặc YouTube.\n\nĐể tải ${mediaType} CHẤT LƯỢNG GỐC, script sẽ mở trình hỗ trợ bóc link (Cobalt/9xbuddy). Bạn đồng ý chứ?`)) {
+                let fallbackUrl = "";
+                if (isYouTube) {
+                    fallbackUrl = `https://cobalt.tools/?u=${encodeURIComponent(pageUrl)}`;
+                } else {
+                    fallbackUrl = `https://9xbuddy.com/process?url=${encodeURIComponent(pageUrl)}`;
+                }
+                window.open(fallbackUrl, "_blank");
+            }
+            return;
+        }
+
+        // 2. Link trực tiếp (File tĩnh)
+        if (!src) { alert("⚠️ Không lấy được liên kết nguồn media này!"); return; }
+
+        let realFormat = "mp4";
+        if (src.toLowerCase().includes(".mp3") || src.toLowerCase().includes(".m4a") || src.toLowerCase().includes(".wav")) {
+            realFormat = "mp3";
+        } else if (src.toLowerCase().includes(".webm")) {
+            realFormat = "webm";
+        }
+
+        if (isAudio && realFormat !== "mp3") {
+            alert("⚠️ Lưu ý: Nguồn gốc là định dạng Video. Hệ thống sẽ giữ nguyên gốc để tránh lỗi hỏng file.");
+        }
+
+        if (!confirm(`❓ XÁC NHẬN TẢI XUỐNG:\n\nBạn có chắc chắn muốn tải tập tin này (Định dạng gốc: .${realFormat}) không?`)) return;
+
+        try {
+            const response = await fetch(src);
+            if (!response.ok) throw new Error("CORS or Network issue");
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `media_${Date.now()}.${realFormat}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+        } catch (e) {
+            console.log("Fetch failed, using fallback direct link: ", e);
+            const a = document.createElement("a");
+            a.href = src;
+            a.target = "_blank"; // Cứu cánh nếu bị lỗi CORS từ server
+            a.download = `media_${Date.now()}.${realFormat}`; 
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    }
+
+    // Gắn sự kiện nút tải xuống
+    ui.dlMp4.onclick = () => triggerDownload(false);
+    ui.dlMp3.onclick = () => triggerDownload(true);
 
     // Bật tắt Panel UI
     function togglePanel(show = !panelVisible) {
