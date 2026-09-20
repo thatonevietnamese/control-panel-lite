@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YouTube ADB - CORE LITE (Cá Nhân) - FIX SCROLL
+// @name         YouTube ADB - CORE LITE (Cá Nhân) - FIX SCROLL V2
 // @namespace    https://github.com/thatonevietnamese/youtube-adb-lite
-// @version      1.4
-// @description  Cốt lõi diệt quảng cáo YouTube - Bản tối ưu setInterval, fix lỗi scroll YouTube
+// @version      1.5
+// @description  Cốt lõi diệt quảng cáo YouTube - Không can thiệp cơ chế scroll
 // @match        *://*.youtube.com/*
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
@@ -10,14 +10,16 @@
 // @run-at       document-start
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    // 1. CSS Ẩn Quảng Cáo
+    // =========================================================
+    // 1. ẨN QUẢNG CÁO
+    // =========================================================
+
     const adSelectors = [
         '#masthead-ad',
         '.video-ads.ytp-ad-module',
-        'tp-yt-paper-dialog:has(yt-mealbar-promo-renderer)',
         'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]',
         '#related #player-ads',
         'ytd-ad-slot-renderer',
@@ -25,104 +27,137 @@
         'ytm-companion-ad-renderer'
     ];
 
-    const style = document.createElement('style');
-
-    style.textContent = adSelectors
-        .map(s => `${s}{display:none!important;}`)
-        .join(' ') + `
-        /* Không ép overflow/pointer-events toàn trang.
-           Để YouTube tự quản lý scroll native. */
-
-        ytd-enforcement-message-view-model,
-        tp-yt-paper-dialog:has(ytd-enforcement-message-view-model) {
-            display: none !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-            opacity: 0 !important;
+    function injectAdCSS() {
+        if (document.getElementById('yt-adb-core-lite-style')) {
+            return;
         }
-    `;
 
-    (document.head || document.documentElement).appendChild(style);
+        const style = document.createElement('style');
+        style.id = 'yt-adb-core-lite-style';
 
-    // 2. Hàm dọn dẹp Polymer (Anti-Adblock popup)
-    function clearPolymerLocks() {
+        style.textContent = adSelectors
+            .map(selector => `${selector}{display:none!important;}`)
+            .join('\n');
+
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    injectAdCSS();
+
+    // =========================================================
+    // 2. XỬ LÝ ANTI-ADBLOCK POPUP
+    //    KHÔNG đụng vào:
+    //    - html overflow
+    //    - body overflow
+    //    - pointer-events
+    //    - iron-disable-scroll
+    //    - backdrop.opened
+    // =========================================================
+
+    function hideEnforcementMessage() {
         const popup = document.querySelector(
             'ytd-enforcement-message-view-model'
         );
 
-        if (!popup) return;
+        if (!popup) {
+            return;
+        }
 
         const dismissBtn = popup.querySelector(
-            '#dismiss-button, button[aria-label="Close"]'
+            '#dismiss-button,' +
+            ' button[aria-label="Close"],' +
+            ' tp-yt-paper-button[aria-label="Close"]'
         );
 
         if (dismissBtn) {
-            dismissBtn.click();
-        }
-
-        // Chỉ xóa lock khi thực sự còn tồn tại,
-        // không can thiệp vào overflow của body/html liên tục.
-        if (document.body) {
-            document.body.classList.remove('iron-disable-scroll');
-        }
-
-        const overlay = document.querySelector(
-            'tp-yt-iron-overlay-backdrop.opened'
-        );
-
-        if (overlay) {
-            overlay.opened = false;
-            overlay.classList.remove('opened');
+            try {
+                dismissBtn.click();
+            } catch (_) {}
         }
     }
 
-    // 3. Hàm xử lý Tua/Skip quảng cáo video
+    // =========================================================
+    // 3. XỬ LÝ VIDEO ADS
+    //    Chỉ chạy khi thực sự có .ad-showing
+    // =========================================================
+
     function handleVideoAds() {
-        const video =
-            document.querySelector('.ad-showing video') ||
-            document.querySelector('video.html5-main-video');
+        const adContainer = document.querySelector(
+            '.html5-video-player.ad-showing'
+        );
 
-        if (!video) return;
+        if (!adContainer) {
+            return;
+        }
 
+        const video = adContainer.querySelector('video');
+
+        if (!video) {
+            return;
+        }
+
+        // Mute quảng cáo
+        try {
+            video.muted = true;
+        } catch (_) {}
+
+        // Skip button
         const skipBtn = document.querySelector(
-            '.ytp-ad-skip-button, ' +
-            '.ytp-skip-ad-button, ' +
+            '.ytp-ad-skip-button,' +
+            '.ytp-skip-ad-button,' +
             '.ytp-ad-skip-button-modern'
         );
 
-        const hasAd = document.querySelector(
-            '.ytp-ad-player-overlay, .ytp-ad-button-icon'
-        );
-
-        if (skipBtn || hasAd) {
-            video.muted = true;
-
-            if (
-                Number.isFinite(video.duration) &&
-                video.duration > 0 &&
-                video.currentTime > 0.1
-            ) {
-                try {
-                    video.currentTime = video.duration;
-                } catch (_) {}
-            }
-
-            if (skipBtn) {
+        if (skipBtn) {
+            try {
                 skipBtn.click();
-            }
+            } catch (_) {}
         }
 
-        // Tự động play lại nếu bị ép pause
-        if (video.paused && video.currentTime < 1) {
-            video.play().catch(() => {});
+        // Tua quảng cáo đến cuối
+        if (
+            Number.isFinite(video.duration) &&
+            video.duration > 0 &&
+            video.currentTime > 0.05
+        ) {
+            try {
+                video.currentTime = video.duration;
+            } catch (_) {}
+        }
+
+        // Nếu quảng cáo bị pause thì cho chạy tiếp
+        if (video.paused) {
+            try {
+                const promise = video.play();
+
+                if (promise && typeof promise.catch === 'function') {
+                    promise.catch(() => {});
+                }
+            } catch (_) {}
         }
     }
 
-    // 4. VÒNG LẶP ĐỊNH KỲ
-    // Không dùng MutationObserver để giảm tải.
+    // =========================================================
+    // 4. LOOP
+    // =========================================================
+
+    let running = false;
+
     setInterval(() => {
-        handleVideoAds();
-        clearPolymerLocks();
-    }, 500);
+        if (running) {
+            return;
+        }
+
+        running = true;
+
+        try {
+            handleVideoAds();
+            hideEnforcementMessage();
+        } catch (_) {
+            // Không để script làm crash YouTube
+        }
+
+        running = false;
+    }, 700);
 
 })();
