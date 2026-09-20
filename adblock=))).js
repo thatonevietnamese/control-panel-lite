@@ -1,11 +1,9 @@
 // ==UserScript==
-// @name         YouTube ADB - CORE LITE (Cá Nhân) - FIX SCROLL V2
+// @name         YouTube ADB - CORE LITE (Instant Ad Kick)
 // @namespace    https://github.com/thatonevietnamese/youtube-adb-lite
-// @version      1.5
-// @description  Cốt lõi diệt quảng cáo YouTube - Không can thiệp cơ chế scroll
+// @version      1.8
+// @description  Instant kick YouTube ads as soon as they appear
 // @match        *://*.youtube.com/*
-// @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
-// @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/adblock%3D))).js
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
@@ -14,150 +12,229 @@
     'use strict';
 
     // =========================================================
-    // 1. ẨN QUẢNG CÁO
+    // 1. CSS ẨN QUẢNG CÁO
     // =========================================================
 
-    const adSelectors = [
-        '#masthead-ad',
-        '.video-ads.ytp-ad-module',
-        'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]',
-        '#related #player-ads',
-        'ytd-ad-slot-renderer',
-        'yt-mealbar-promo-renderer',
-        'ytm-companion-ad-renderer'
-    ];
+    const style = document.createElement('style');
 
-    function injectAdCSS() {
-        if (document.getElementById('yt-adb-core-lite-style')) {
+    style.textContent = `
+        #masthead-ad,
+        #related #player-ads,
+        ytd-ad-slot-renderer,
+        ytm-companion-ad-renderer,
+        ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
+        yt-mealbar-promo-renderer {
+            display: none !important;
+        }
+    `;
+
+    (document.head || document.documentElement).appendChild(style);
+
+    // =========================================================
+    // 2. TRẠNG THÁI
+    // =========================================================
+
+    let adKicking = false;
+    let currentVideo = null;
+
+    // =========================================================
+    // 3. ĐÁ QUẢNG CÁO NGAY KHI XUẤT HIỆN
+    // =========================================================
+
+    function kickAd() {
+        const player = document.querySelector('.html5-video-player');
+
+        if (!player) {
+            adKicking = false;
             return;
         }
 
-        const style = document.createElement('style');
-        style.id = 'yt-adb-core-lite-style';
+        const isAd =
+            player.classList.contains('ad-showing') ||
+            player.querySelector('.ytp-ad-module') !== null ||
+            player.querySelector('.ytp-ad-player-overlay') !== null;
 
-        style.textContent = adSelectors
-            .map(selector => `${selector}{display:none!important;}`)
-            .join('\n');
-
-        (document.head || document.documentElement).appendChild(style);
-    }
-
-    injectAdCSS();
-
-    // =========================================================
-    // 2. XỬ LÝ ANTI-ADBLOCK POPUP
-    //    KHÔNG đụng vào:
-    //    - html overflow
-    //    - body overflow
-    //    - pointer-events
-    //    - iron-disable-scroll
-    //    - backdrop.opened
-    // =========================================================
-
-    function hideEnforcementMessage() {
-        const popup = document.querySelector(
-            'ytd-enforcement-message-view-model'
-        );
-
-        if (!popup) {
+        if (!isAd) {
+            adKicking = false;
             return;
         }
 
-        const dismissBtn = popup.querySelector(
-            '#dismiss-button,' +
-            ' button[aria-label="Close"],' +
-            ' tp-yt-paper-button[aria-label="Close"]'
-        );
-
-        if (dismissBtn) {
-            try {
-                dismissBtn.click();
-            } catch (_) {}
-        }
-    }
-
-    // =========================================================
-    // 3. XỬ LÝ VIDEO ADS
-    //    Chỉ chạy khi thực sự có .ad-showing
-    // =========================================================
-
-    function handleVideoAds() {
-        const adContainer = document.querySelector(
-            '.html5-video-player.ad-showing'
-        );
-
-        if (!adContainer) {
-            return;
-        }
-
-        const video = adContainer.querySelector('video');
+        const video = player.querySelector('video');
 
         if (!video) {
             return;
         }
+
+        currentVideo = video;
 
         // Mute quảng cáo
         try {
             video.muted = true;
         } catch (_) {}
 
-        // Skip button
-        const skipBtn = document.querySelector(
+        // =====================================================
+        // ĐÁ THẲNG VIDEO TỚI CUỐI
+        // Không chờ Skip Ads
+        // =====================================================
+
+        try {
+            if (Number.isFinite(video.duration) && video.duration > 0) {
+                video.currentTime = video.duration;
+            } else {
+                // Khi duration chưa load xong
+                video.currentTime = 999999;
+            }
+        } catch (_) {}
+
+        // =====================================================
+        // Thử nút skip nếu nó đã xuất hiện
+        // =====================================================
+
+        const skip = player.querySelector(
             '.ytp-ad-skip-button,' +
             '.ytp-skip-ad-button,' +
             '.ytp-ad-skip-button-modern'
         );
 
-        if (skipBtn) {
+        if (skip) {
             try {
-                skipBtn.click();
+                skip.click();
             } catch (_) {}
         }
 
-        // Tua quảng cáo đến cuối
-        if (
-            Number.isFinite(video.duration) &&
-            video.duration > 0 &&
-            video.currentTime > 0.05
-        ) {
-            try {
-                video.currentTime = video.duration;
-            } catch (_) {}
-        }
-
-        // Nếu quảng cáo bị pause thì cho chạy tiếp
-        if (video.paused) {
-            try {
-                const promise = video.play();
-
-                if (promise && typeof promise.catch === 'function') {
-                    promise.catch(() => {});
-                }
-            } catch (_) {}
-        }
+        adKicking = true;
     }
 
     // =========================================================
-    // 4. LOOP
+    // 4. THEO DÕI CLASS "ad-showing"
     // =========================================================
 
-    let running = false;
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            if (
+                mutation.type === 'attributes' &&
+                mutation.attributeName === 'class'
+            ) {
+                const target = mutation.target;
 
-    setInterval(() => {
-        if (running) {
+                if (
+                    target instanceof HTMLElement &&
+                    target.classList.contains('html5-video-player')
+                ) {
+                    if (target.classList.contains('ad-showing')) {
+                        kickAd();
+                    } else {
+                        adKicking = false;
+                    }
+                }
+            }
+
+            if (mutation.type === 'childList') {
+                if (
+                    document.querySelector('.html5-video-player.ad-showing')
+                ) {
+                    kickAd();
+                }
+            }
+        }
+    });
+
+    observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['class']
+    });
+
+    // =========================================================
+    // 5. BẮT VIDEO MỚI
+    // =========================================================
+
+    function hookVideo(video) {
+        if (video.dataset.instantAdKick) {
             return;
         }
 
-        running = true;
+        video.dataset.instantAdKick = '1';
 
-        try {
-            handleVideoAds();
-            hideEnforcementMessage();
-        } catch (_) {
-            // Không để script làm crash YouTube
+        currentVideo = video;
+
+        // Ngay khi metadata có
+        video.addEventListener('loadedmetadata', () => {
+            if (
+                video.closest('.html5-video-player')?.classList
+                    .contains('ad-showing')
+            ) {
+                kickAd();
+            }
+        });
+
+        // Ngay khi duration thay đổi
+        video.addEventListener('durationchange', () => {
+            if (
+                video.closest('.html5-video-player')?.classList
+                    .contains('ad-showing')
+            ) {
+                kickAd();
+            }
+        });
+
+        // Khi YouTube bắt đầu phát
+        video.addEventListener('play', () => {
+            if (
+                video.closest('.html5-video-player')?.classList
+                    .contains('ad-showing')
+            ) {
+                kickAd();
+            }
+        });
+
+        // Nếu ad vẫn chưa biến mất
+        video.addEventListener('timeupdate', () => {
+            if (
+                video.closest('.html5-video-player')?.classList
+                    .contains('ad-showing')
+            ) {
+                kickAd();
+            }
+        });
+    }
+
+    // =========================================================
+    // 6. QUÉT VIDEO
+    // =========================================================
+
+    function scanVideos() {
+        document.querySelectorAll('video').forEach(hookVideo);
+    }
+
+    scanVideos();
+
+    const videoObserver = new MutationObserver(scanVideos);
+
+    videoObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+
+    // =========================================================
+    // 7. INSTANT FALLBACK
+    // =========================================================
+    // Chỉ chạy khi đang có quảng cáo.
+    // Không can thiệp scroll.
+
+    function instantLoop() {
+        const player = document.querySelector(
+            '.html5-video-player.ad-showing'
+        );
+
+        if (player) {
+            kickAd();
         }
 
-        running = false;
-    }, 700);
+        requestAnimationFrame(instantLoop);
+    }
+
+    requestAnimationFrame(instantLoop);
 
 })();
