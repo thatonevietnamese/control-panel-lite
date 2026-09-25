@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YouTube ADB - CORE LITE (Instant Ad Kick)
+// @name         YouTube ADB - CORE LITE (Instant Ad Kick - CPU/RAM Optimized)
 // @namespace    https://github.com/thatonevietnamese/youtube-adb-lite
-// @version      1.8
-// @description  Instant kick YouTube ads as soon as they appear
+// @version      1.9
+// @description  Instant kick YouTube ads with targeted observers and low CPU usage
 // @match        *://*.youtube.com/*
 // @grant        none
 // @run-at       document-start
@@ -30,32 +30,30 @@
 
     (document.head || document.documentElement).appendChild(style);
 
+
     // =========================================================
-    // 2. TRẠNG THÁI
+    // 2. STATE
     // =========================================================
 
-    let adKicking = false;
+    let currentPlayer = null;
     let currentVideo = null;
 
+    let playerObserver = null;
+
+    let lastAdCheck = false;
+
+
     // =========================================================
-    // 3. ĐÁ QUẢNG CÁO NGAY KHI XUẤT HIỆN
+    // 3. KICK AD
     // =========================================================
 
-    function kickAd() {
-        const player = document.querySelector('.html5-video-player');
-
-        if (!player) {
-            adKicking = false;
+    function kickAd(player) {
+        if (!player || !player.isConnected) {
             return;
         }
 
-        const isAd =
-            player.classList.contains('ad-showing') ||
-            player.querySelector('.ytp-ad-module') !== null ||
-            player.querySelector('.ytp-ad-player-overlay') !== null;
-
-        if (!isAd) {
-            adKicking = false;
+        if (!player.classList.contains('ad-showing')) {
+            lastAdCheck = false;
             return;
         }
 
@@ -65,30 +63,38 @@
             return;
         }
 
-        currentVideo = video;
+        lastAdCheck = true;
 
-        // Mute quảng cáo
+        // -----------------------------
+        // MUTE AD
+        // -----------------------------
+
         try {
             video.muted = true;
         } catch (_) {}
 
-        // =====================================================
-        // ĐÁ THẲNG VIDEO TỚI CUỐI
-        // Không chờ Skip Ads
-        // =====================================================
+
+        // -----------------------------
+        // SEEK TO END
+        // -----------------------------
 
         try {
-            if (Number.isFinite(video.duration) && video.duration > 0) {
-                video.currentTime = video.duration;
+            if (
+                Number.isFinite(video.duration) &&
+                video.duration > 0
+            ) {
+                if (video.currentTime < video.duration - 0.05) {
+                    video.currentTime = video.duration;
+                }
             } else {
-                // Khi duration chưa load xong
                 video.currentTime = 999999;
             }
         } catch (_) {}
 
-        // =====================================================
-        // Thử nút skip nếu nó đã xuất hiện
-        // =====================================================
+
+        // -----------------------------
+        // SKIP BUTTON
+        // -----------------------------
 
         const skip = player.querySelector(
             '.ytp-ad-skip-button,' +
@@ -101,140 +107,238 @@
                 skip.click();
             } catch (_) {}
         }
-
-        adKicking = true;
     }
 
-    // =========================================================
-    // 4. THEO DÕI CLASS "ad-showing"
-    // =========================================================
-
-    const observer = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-            if (
-                mutation.type === 'attributes' &&
-                mutation.attributeName === 'class'
-            ) {
-                const target = mutation.target;
-
-                if (
-                    target instanceof HTMLElement &&
-                    target.classList.contains('html5-video-player')
-                ) {
-                    if (target.classList.contains('ad-showing')) {
-                        kickAd();
-                    } else {
-                        adKicking = false;
-                    }
-                }
-            }
-
-            if (mutation.type === 'childList') {
-                if (
-                    document.querySelector('.html5-video-player.ad-showing')
-                ) {
-                    kickAd();
-                }
-            }
-        }
-    });
-
-    observer.observe(document.documentElement, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        attributeFilter: ['class']
-    });
 
     // =========================================================
-    // 5. BẮT VIDEO MỚI
+    // 4. CHECK PLAYER
     // =========================================================
 
-    function hookVideo(video) {
-        if (video.dataset.instantAdKick) {
+    function checkPlayer(player) {
+        if (!player || !player.isConnected) {
             return;
         }
 
-        video.dataset.instantAdKick = '1';
+        if (player.classList.contains('ad-showing')) {
+            kickAd(player);
+        } else {
+            lastAdCheck = false;
+        }
+    }
+
+
+    // =========================================================
+    // 5. HOOK VIDEO
+    // =========================================================
+
+    function hookVideo(video, player) {
+        if (!video || video === currentVideo) {
+            return;
+        }
 
         currentVideo = video;
 
-        // Ngay khi metadata có
-        video.addEventListener('loadedmetadata', () => {
-            if (
-                video.closest('.html5-video-player')?.classList
-                    .contains('ad-showing')
-            ) {
-                kickAd();
-            }
-        });
 
-        // Ngay khi duration thay đổi
-        video.addEventListener('durationchange', () => {
-            if (
-                video.closest('.html5-video-player')?.classList
-                    .contains('ad-showing')
-            ) {
-                kickAd();
-            }
-        });
-
-        // Khi YouTube bắt đầu phát
-        video.addEventListener('play', () => {
-            if (
-                video.closest('.html5-video-player')?.classList
-                    .contains('ad-showing')
-            ) {
-                kickAd();
-            }
-        });
-
-        // Nếu ad vẫn chưa biến mất
-        video.addEventListener('timeupdate', () => {
-            if (
-                video.closest('.html5-video-player')?.classList
-                    .contains('ad-showing')
-            ) {
-                kickAd();
-            }
-        });
-    }
-
-    // =========================================================
-    // 6. QUÉT VIDEO
-    // =========================================================
-
-    function scanVideos() {
-        document.querySelectorAll('video').forEach(hookVideo);
-    }
-
-    scanVideos();
-
-    const videoObserver = new MutationObserver(scanVideos);
-
-    videoObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
-
-    // =========================================================
-    // 7. INSTANT FALLBACK
-    // =========================================================
-    // Chỉ chạy khi đang có quảng cáo.
-    // Không can thiệp scroll.
-
-    function instantLoop() {
-        const player = document.querySelector(
-            '.html5-video-player.ad-showing'
+        // Metadata loaded
+        video.addEventListener(
+            'loadedmetadata',
+            function () {
+                checkPlayer(player);
+            },
+            { passive: true }
         );
 
-        if (player) {
-            kickAd();
-        }
 
-        requestAnimationFrame(instantLoop);
+        // Duration changed
+        video.addEventListener(
+            'durationchange',
+            function () {
+                checkPlayer(player);
+            },
+            { passive: true }
+        );
+
+
+        // Playback started
+        video.addEventListener(
+            'play',
+            function () {
+                checkPlayer(player);
+            },
+            { passive: true }
+        );
+
+
+        // Ad can remain active while time changes
+        video.addEventListener(
+            'timeupdate',
+            function () {
+                if (player.classList.contains('ad-showing')) {
+                    kickAd(player);
+                }
+            },
+            { passive: true }
+        );
     }
 
-    requestAnimationFrame(instantLoop);
+
+    // =========================================================
+    // 6. HOOK YOUTUBE PLAYER
+    // =========================================================
+
+    function hookPlayer(player) {
+        if (!player || player === currentPlayer) {
+            return;
+        }
+
+
+        // Cleanup old observer
+        if (playerObserver) {
+            playerObserver.disconnect();
+            playerObserver = null;
+        }
+
+
+        currentPlayer = player;
+        currentVideo = null;
+
+
+        // ---------------------------------------------
+        // ONLY OBSERVE THE PLAYER
+        // ---------------------------------------------
+
+        playerObserver = new MutationObserver(function (mutations) {
+
+            for (const mutation of mutations) {
+
+                // Player class changed
+                if (
+                    mutation.type === 'attributes' &&
+                    mutation.attributeName === 'class'
+                ) {
+                    if (
+                        player.classList.contains('ad-showing')
+                    ) {
+                        kickAd(player);
+                    } else {
+                        lastAdCheck = false;
+                    }
+
+                    continue;
+                }
+
+
+                // Something was added/removed inside player
+                if (mutation.type === 'childList') {
+
+                    const video = player.querySelector('video');
+
+                    if (video) {
+                        hookVideo(video, player);
+                    }
+
+                    if (
+                        player.classList.contains('ad-showing')
+                    ) {
+                        kickAd(player);
+                    }
+                }
+            }
+        });
+
+
+        playerObserver.observe(player, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['class']
+        });
+
+
+        // Hook existing video
+        const video = player.querySelector('video');
+
+        if (video) {
+            hookVideo(video, player);
+        }
+
+
+        // Initial check
+        checkPlayer(player);
+    }
+
+
+    // =========================================================
+    // 7. FIND YOUTUBE PLAYER
+    // =========================================================
+
+    function findPlayer() {
+
+        const player =
+            document.getElementById('movie_player') ||
+            document.querySelector('.html5-video-player');
+
+
+        if (player) {
+            hookPlayer(player);
+        }
+    }
+
+
+    // =========================================================
+    // 8. YOUTUBE SPA PLAYER DETECTOR
+    // =========================================================
+    //
+    // IMPORTANT:
+    //
+    // Không dùng requestAnimationFrame.
+    // Không scan toàn bộ DOM mỗi frame.
+    //
+    // Observer này CHỈ dùng để phát hiện player được
+    // tạo/thay thế khi YouTube chuyển video hoặc route.
+    //
+    // Khi player đã tồn tại thì gần như không làm gì.
+    // =========================================================
+
+    const rootObserver = new MutationObserver(function () {
+
+        if (
+            !currentPlayer ||
+            !currentPlayer.isConnected
+        ) {
+            findPlayer();
+            return;
+        }
+
+
+        // Player có thể bị YouTube thay bằng player mới
+        const player =
+            document.getElementById('movie_player') ||
+            document.querySelector('.html5-video-player');
+
+
+        if (
+            player &&
+            player !== currentPlayer
+        ) {
+            hookPlayer(player);
+        }
+    });
+
+
+    rootObserver.observe(
+        document.documentElement,
+        {
+            childList: true,
+            subtree: true
+        }
+    );
+
+
+    // =========================================================
+    // 9. INITIAL START
+    // =========================================================
+
+    findPlayer();
 
 })();
