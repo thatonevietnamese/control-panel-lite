@@ -1,10 +1,11 @@
 // ==UserScript==
-// @name         Video/Audio Control Panel LITE v5.7 (Max Lite - Fixed Speed)
+// @name         Video/Audio Control Panel LITE v5.8.1 (Max Lite - Fixed Speed)
 // @namespace    http://tampermonkey.net/
-// @version      5.7.0
+// @version      5.8.1
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
+// @all-frames   true
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -376,6 +377,7 @@
             activeMedia,
             false
         );
+        // Đã xóa hoàn toàn tự động pop-up UI ở đây!
     }
 
     // =========================================================
@@ -768,7 +770,7 @@
     document.addEventListener("fullscreenchange", mountPanel);
 
     // =========================================================
-    // CONTROLS & UI BINDINGS
+    // CONTROLS
     // =========================================================
 
     const ui = {
@@ -788,27 +790,59 @@
     }
 
     function saveSettings() {
-        GM_setValue("vcp_settings", {
+        const stData = {
             vol: settings.vol,
             loop: settings.loop,
             forceResume: settings.forceResume,
             q: settings.q,
             enableBoost: settings.enableBoost
-        });
+        };
+
+        GM_setValue(
+            "vcp_settings",
+            stData
+        );
     }
 
     function updateVolUI(v) {
         ui.slider.value = v;
-        ui.vol.value = Number(v).toFixed(2);
-        ui.vol.classList.toggle("boost", v > 1 && settings.enableBoost);
+
+        ui.vol.value =
+            Number(v).toFixed(2);
+
+        ui.vol.classList.toggle(
+            "boost",
+            v > 1 &&
+            settings.enableBoost
+        );
     }
 
     function handleVolChange(val) {
-        let v = parseFloat(val) || 0;
-        if (!settings.enableBoost && v > 1) v = 1;
-        settings.vol = Math.max(0, Math.min(5, v));
+        let v =
+            parseFloat(val) || 0;
+
+        if (
+            !settings.enableBoost &&
+            v > 1
+        ) {
+            v = 1;
+        }
+
+        settings.vol =
+            Math.max(
+                0,
+                Math.min(5, v)
+            );
+
         updateVolUI(settings.vol);
-        if (activeMedia) applyMediaSettings(activeMedia, true);
+
+        if (activeMedia) {
+            applyMediaSettings(
+                activeMedia,
+                true
+            );
+        }
+
         saveSettings();
     }
 
@@ -817,9 +851,17 @@
 
     ui.boost.onchange = e => {
         settings.enableBoost = e.target.checked;
-        if (!settings.enableBoost && settings.vol > 1) settings.vol = 1;
+
+        if (!settings.enableBoost && settings.vol > 1) {
+            settings.vol = 1;
+        }
+
         updateVolUI(settings.vol);
-        if (activeMedia) applyMediaSettings(activeMedia, true);
+
+        if (activeMedia) {
+            applyMediaSettings(activeMedia, true);
+        }
+
         saveSettings();
     };
 
@@ -831,9 +873,13 @@
     ui.force.onchange = e => {
         settings.forceResume = e.target.checked;
         saveSettings();
+
         if (settings.forceResume) {
             resumeMedia(activeMedia);
-            if (isYouTube) resumeYouTube();
+
+            if (isYouTube) {
+                resumeYouTube();
+            }
         }
     };
 
@@ -846,36 +892,62 @@
     // SPEED
     ui.btn3x.onclick = () => {
         isSpeedForced = !isSpeedForced;
+
         if (!isSpeedForced) {
             ui.btn3x.classList.remove("active");
             ui.spdInput.disabled = true;
+
             if (activeMedia) {
-                activeMedia.playbackRate = 1;
-                activeMedia.defaultPlaybackRate = 1;
+                if (isYouTube) {
+                    const player =
+                        document.getElementById("movie_player") ||
+                        document.querySelector(".html5-video-player");
+
+                    if (player && typeof player.getPlaybackRate === "function") {
+                        const rate = player.getPlaybackRate();
+                        activeMedia.playbackRate = rate;
+                        activeMedia.defaultPlaybackRate = rate;
+                    } else {
+                        activeMedia.playbackRate = 1;
+                        activeMedia.defaultPlaybackRate = 1;
+                    }
+                } else {
+                    activeMedia.playbackRate = 1;
+                    activeMedia.defaultPlaybackRate = 1;
+                }
             }
+
         } else {
             ui.btn3x.classList.add("active");
             ui.spdInput.disabled = false;
             customSpeed = parseFloat(ui.spdInput.value) || 3;
-            if (activeMedia) applyMediaSettings(activeMedia, false);
+
+            if (activeMedia) {
+                applyMediaSettings(activeMedia, false);
+            }
         }
     };
 
     ui.spdInput.onchange = e => {
         if (!isSpeedForced) return;
+
         let val = parseFloat(e.target.value);
         if (isNaN(val)) return;
+
         val = Math.max(0.1, Math.min(5, val));
         ui.spdInput.value = val;
         customSpeed = val;
-        if (activeMedia) applyMediaSettings(activeMedia, false);
+
+        if (activeMedia) {
+            applyMediaSettings(activeMedia, false);
+        }
     };
 
     // =========================================================
-    // PANEL TOGGLE & STATUS CHECK
+    // PANEL TOGGLE & MEDIA CHECK
     // =========================================================
 
-    function checkActiveMediaStatus() {
+    function findAndSetActiveMedia() {
         if (activeMedia && (!document.contains(activeMedia) || !isActuallyPlaying(activeMedia))) {
             activeMedia = null;
         }
@@ -895,7 +967,7 @@
         panelVisible = show;
 
         if (show) {
-            checkActiveMediaStatus();
+            findAndSetActiveMedia();
             const hasMedia = activeMedia && document.contains(activeMedia) && isActuallyPlaying(activeMedia);
 
             if (!hasMedia) {
@@ -916,6 +988,7 @@
         "keydown",
         e => {
             const el = e.target;
+
             if (
                 el &&
                 (
@@ -941,22 +1014,14 @@
     ui.quality.value = settings.q;
 
     // =========================================================
-    // BACKGROUND FALLBACK & MUTATION OBSERVER
+    // LOW CPU FALLBACK
     // =========================================================
 
-    const observer = new MutationObserver(() => {
-        if (!activeMedia) {
-            checkActiveMediaStatus();
-        }
-    });
-
-    observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
-
     setInterval(() => {
-        if (activeMedia && document.contains(activeMedia)) {
+        if (
+            activeMedia &&
+            document.contains(activeMedia)
+        ) {
             if (
                 settings.forceResume &&
                 activeMedia.paused &&
@@ -964,12 +1029,18 @@
                 !activeMedia.seeking
             ) {
                 resumeMedia(activeMedia);
-                if (isYouTube) resumeYouTube();
+
+                if (isYouTube) {
+                    resumeYouTube();
+                }
             }
+
             return;
         }
 
-        checkActiveMediaStatus();
-    }, 5000);
+        // Quét tìm media khi chưa chọn được activeMedia
+        findAndSetActiveMedia();
+
+    }, 3000);
 
 })();
