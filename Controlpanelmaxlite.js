@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.0.0
-// @description  Unified media controls, audio boost, loop, force resume, playback speed, YouTube quality and ad bypass.
+// @version      1.0.1
+// @description  Unified media controls with YouTube Home exclusion and stability fixes.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -65,6 +65,10 @@
     let panelVisible = false;
     let volLock = false;
 
+    const userPausedMedia = new WeakSet();
+    const originalPlaybackRates = new WeakMap();
+    let recentPlayerInteractionUntil = 0;
+
     const isYouTube = /(^|\.)youtube\.com$/i.test(location.hostname);
     const isTopFrame = (() => {
         try {
@@ -73,6 +77,24 @@
             return true;
         }
     })();
+
+    function isYouTubeHome() {
+        if (!isYouTube) return false;
+
+        try {
+            const topLocation = window.top.location;
+            return /(^|\\.)youtube\\.com$/i.test(topLocation.hostname) &&
+                topLocation.pathname === "/";
+        } catch (_) {
+            return isTopFrame && location.pathname === "/";
+        }
+    }
+
+    // Keep only the lightweight SPA route watcher alive on YouTube Home.
+    let pageEnabled = !isYouTubeHome();
+    function isPageEnabled() {
+        return pageEnabled && !isYouTubeHome();
+    }
 
     // Shared per-frame audio graph registry. WeakMap avoids retaining media elements.
     const audioCtxMap = new WeakMap();
@@ -194,7 +216,7 @@
     }
 
     function isYouTubeAdActive() {
-        if (!isYouTube || !isTopFrame) return false;
+        if (!isPageEnabled() || !isYouTube || !isTopFrame) return false;
 
         const player = adPlayer && adPlayer.isConnected
             ? adPlayer
@@ -207,7 +229,7 @@
     }
 
     function injectAdsStyles() {
-        if (!isYouTube || !isTopFrame || adStyleInjected) return;
+        if (!isPageEnabled() || !isYouTube || !isTopFrame || adStyleInjected) return;
 
         const style = document.createElement("style");
         style.id = "ymcs-ad-bypass-style";
@@ -337,7 +359,7 @@
     }
 
     function checkYouTubeAds() {
-        if (!adPlayer || !adPlayer.isConnected) return;
+        if (!isPageEnabled() || !adPlayer || !adPlayer.isConnected) return;
 
         if (!adVideo || !adVideo.isConnected || adVideo.parentElement !== adPlayer) {
             adVideo = adPlayer.querySelector("video");
@@ -360,7 +382,7 @@
     }
 
     function bindYouTubePlayer() {
-        if (!isYouTube || !isTopFrame) return false;
+        if (!isPageEnabled() || !isYouTube || !isTopFrame) return false;
 
         const nextPlayer = document.querySelector(ADS_QUERY.player);
         if (!nextPlayer) return false;
@@ -389,10 +411,12 @@
     }
 
     function schedulePlayerBind() {
-        if (!isYouTube || !isTopFrame) return;
+        if (!isPageEnabled() || !isYouTube || !isTopFrame) return;
         setTimeout(bindYouTubePlayer, 0);
         setTimeout(bindYouTubePlayer, 250);
     }
+
+    let injectLanguageStyle = null;
 
     if (isYouTube && isTopFrame) {
         const language = (navigator.language || "en").slice(0, 2);
@@ -427,7 +451,8 @@
         }[language] || "Wait or Press Skip";
 
         // Keep the UI text localized without building a second stylesheet.
-        const injectLanguageStyle = () => {
+        injectLanguageStyle = () => {
+            if (!isPageEnabled()) return;
             injectAdsStyles();
             const style = document.getElementById("ymcs-ad-bypass-style");
             if (style && waitText !== "Wait or Press Skip") {
@@ -444,18 +469,72 @@
             injectLanguageStyle();
         }
 
-        window.addEventListener("yt-navigate-finish", schedulePlayerBind);
-        window.addEventListener("yt-page-data-updated", schedulePlayerBind);
+        window.addEventListener("yt-navigate-finish", handleYouTubeRouteChange);
+        window.addEventListener("yt-page-data-updated", handleYouTubeRouteChange);
         window.addEventListener("load", bindYouTubePlayer, { once: true });
 
-        adRetryTimer = setInterval(() => {
-            adRetryCount += 1;
-            const ready = bindYouTubePlayer();
-            if (ready || adRetryCount >= 14) {
+        if (isPageEnabled()) {
+            adRetryTimer = setInterval(() => {
+                adRetryCount += 1;
+                const ready = bindYouTubePlayer();
+                if (ready || adRetryCount >= 14 || !isPageEnabled()) {
+                    clearInterval(adRetryTimer);
+                    adRetryTimer = null;
+                }
+            }, 750);
+        }
+    }
+
+    function handleYouTubeRouteChange() {
+        if (!isYouTube || !isTopFrame) return;
+
+        if (isYouTubeHome()) {
+            pageEnabled = false;
+            panelVisible = false;
+            if (panel) panel.style.display = "none";
+
+            if (adRetryTimer !== null) {
                 clearInterval(adRetryTimer);
                 adRetryTimer = null;
             }
-        }, 750);
+            if (adPlayerObserver) {
+                adPlayerObserver.disconnect();
+                adPlayerObserver = null;
+            }
+            if (adWasActive) restoreAfterAd();
+            adPlayer = null;
+            adVideo = null;
+
+            if (activeMedia) {
+                activeMedia.removeEventListener("ended", checkLoop);
+
+                const previousRate = originalPlaybackRates.get(activeMedia);
+                if (isSpeedForced && Number.isFinite(previousRate)) {
+                    activeMedia.playbackRate = previousRate;
+                    activeMedia.defaultPlaybackRate = previousRate;
+                }
+                originalPlaybackRates.delete(activeMedia);
+
+                disconnectDetachedAudioGraph(activeMedia);
+                activeMedia = null;
+            }
+
+            const style = document.getElementById("ymcs-ad-bypass-style");
+            if (style) style.remove();
+            adStyleInjected = false;
+
+            if (forceResumeTimer !== null) {
+                clearInterval(forceResumeTimer);
+                forceResumeTimer = null;
+            }
+            return;
+        }
+
+        pageEnabled = true;
+        if (injectLanguageStyle) injectLanguageStyle();
+        schedulePlayerBind();
+        mountPanel();
+        updateForceResumeTimer();
     }
 
     // =========================================================
@@ -493,7 +572,7 @@
     }
 
     function isRelevantMedia(m) {
-        if (!isUsableMedia(m)) return false;
+        if (!isPageEnabled() || !isUsableMedia(m)) return false;
 
         if (m.tagName === "AUDIO") {
             return true;
@@ -520,8 +599,10 @@
 
     function resumeMedia(m) {
         if (
+            !isPageEnabled() ||
             !settings.forceResume ||
             !m ||
+            userPausedMedia.has(m) ||
             !document.contains(m) ||
             (isYouTubeAdActive() && m.tagName === "VIDEO") ||
             m.ended ||
@@ -540,7 +621,7 @@
     }
 
     function resumeYouTube() {
-        if (!settings.forceResume || !isYouTube || isYouTubeAdActive()) {
+        if (!isPageEnabled() || !settings.forceResume || !isYouTube || isYouTubeAdActive()) {
             return;
         }
 
@@ -556,7 +637,8 @@
             ) {
                 const state = player.getPlayerState();
 
-                if (state === 2) {
+                const video = document.querySelector("video");
+                if (state === 2 && video && !userPausedMedia.has(video)) {
                     player.playVideo();
                 }
             }
@@ -577,7 +659,7 @@
     document.addEventListener(
         "visibilitychange",
         () => {
-            if (!settings.forceResume) return;
+            if (!isPageEnabled() || !settings.forceResume) return;
 
             resumeMedia(activeMedia);
 
@@ -594,6 +676,7 @@
 
     function applyMediaSettings(m, fromScriptUI = false) {
         if (
+            !isPageEnabled() ||
             !m ||
             volLock ||
             !document.contains(m) ||
@@ -605,6 +688,9 @@
         // SPEED
         if (isSpeedForced) {
             try {
+                if (!originalPlaybackRates.has(m)) {
+                    originalPlaybackRates.set(m, m.playbackRate || 1);
+                }
                 const safeSpeed = Math.max(
                     0.1,
                     Math.min(5, customSpeed)
@@ -622,7 +708,7 @@
 
         // AUDIO BOOST
         if (settings.enableBoost) {
-            if (!data && !m._vcp_connected) {
+            if (!data) {
                 try {
                     const Ctx =
                         window.AudioContext ||
@@ -653,7 +739,6 @@
                         };
 
                         audioCtxMap.set(m, data);
-                        m._vcp_connected = true;
                     }
                 } catch (e) {}
             }
@@ -663,10 +748,6 @@
                 data.ctx.state === "suspended"
             ) {
                 data.ctx.resume().catch(() => {});
-            }
-
-            if (m.muted && settings.vol > 0) {
-                m.muted = false;
             }
 
             volLock = true;
@@ -698,6 +779,10 @@
             }
 
         } else {
+            if (data && data.ctx && data.ctx.state === "suspended") {
+                data.ctx.resume().catch(() => {});
+            }
+
             if (data && data.gain) {
                 try {
                     data.gain.gain.setTargetAtTime(
@@ -730,7 +815,7 @@
     // =========================================================
 
     function applyYouTubeQuality() {
-        if (!isYouTube || !isTopFrame || settings.q === "auto") {
+        if (!isPageEnabled() || !isYouTube || !isTopFrame) {
             return;
         }
 
@@ -779,19 +864,23 @@
 
         if (m !== activeMedia) {
             if (activeMedia) {
-                activeMedia.removeEventListener(
-                    "timeupdate",
-                    checkLoop
-                );
+                activeMedia.removeEventListener("ended", checkLoop);
+
+                if (isSpeedForced) {
+                    const previousRate = originalPlaybackRates.get(activeMedia);
+                    if (Number.isFinite(previousRate)) {
+                        activeMedia.playbackRate = previousRate;
+                        activeMedia.defaultPlaybackRate = previousRate;
+                    }
+                    originalPlaybackRates.delete(activeMedia);
+                }
+
                 disconnectDetachedAudioGraph(activeMedia);
             }
 
             activeMedia = m;
 
-            activeMedia.addEventListener(
-                "timeupdate",
-                checkLoop
-            );
+            activeMedia.addEventListener("ended", checkLoop);
 
             applyYouTubeQuality();
             updateForceResumeTimer();
@@ -813,10 +902,11 @@
         (e) => {
             const target = e.target;
 
-            if (!isMedia(target)) return;
+            if (!isPageEnabled() || !isMedia(target)) return;
             if (!isActuallyPlaying(target)) return;
             if (!isRelevantMedia(target)) return;
 
+            userPausedMedia.delete(target);
             setActiveMedia(target);
         },
         true
@@ -824,13 +914,40 @@
 
     let resumeTimeout = null;
 
+    document.addEventListener("pointerdown", e => {
+        if (!isPageEnabled()) return;
+        const player = isYouTube
+            ? document.querySelector("#movie_player, .html5-video-player")
+            : null;
+        if (player && (player === e.target || player.contains(e.target))) {
+            recentPlayerInteractionUntil = Date.now() + 1200;
+        } else if (activeMedia && (e.target === activeMedia || activeMedia.contains(e.target))) {
+            recentPlayerInteractionUntil = Date.now() + 1200;
+        }
+    }, true);
+
+    document.addEventListener("keydown", e => {
+        if (!isPageEnabled() || !isYouTube) return;
+        if ([" ", "k", "K"].includes(e.key)) {
+            const player = document.querySelector("#movie_player, .html5-video-player");
+            if (player && (player.contains(e.target) || e.target === document.body)) {
+                recentPlayerInteractionUntil = Date.now() + 1200;
+            }
+        }
+    }, true);
+
     document.addEventListener(
         "pause",
         (e) => {
             const target = e.target;
 
-            if (!isMedia(target)) return;
+            if (!isPageEnabled() || !isMedia(target)) return;
             if (!settings.forceResume) return;
+
+            if (Date.now() < recentPlayerInteractionUntil) {
+                userPausedMedia.add(target);
+                return;
+            }
 
             if (
                 target === activeMedia ||
@@ -867,13 +984,14 @@
             const target = e.target;
 
             if (
+                !isPageEnabled() ||
                 !isMedia(target) ||
                 volLock
             ) {
                 return;
             }
 
-            if (!settings.enableBoost) {
+            if (!settings.enableBoost && target === activeMedia) {
                 settings.vol = target.volume;
 
                 updateVolUI(
@@ -881,11 +999,8 @@
                 );
 
                 saveSettings();
-            } else {
-                applyMediaSettings(
-                    target,
-                    false
-                );
+            } else if (settings.enableBoost && target === activeMedia) {
+                applyMediaSettings(target, false);
             }
         },
         true
@@ -897,6 +1012,7 @@
             const target = e.target;
 
             if (
+                !isPageEnabled() ||
                 !isSpeedForced ||
                 !isMedia(target) ||
                 target !== activeMedia ||
@@ -923,25 +1039,24 @@
     );
 
     function checkLoop() {
+        const media = activeMedia;
         if (
+            !isPageEnabled() ||
             !settings.loop ||
-            !activeMedia ||
+            !media ||
+            !document.contains(media) ||
             isYouTubeAdActive()
         ) {
             return;
         }
 
-        if (
-            activeMedia.duration &&
-            activeMedia.currentTime >=
-                activeMedia.duration - 0.2
-        ) {
-            activeMedia.currentTime = 0;
-
-            activeMedia
-                .play()
-                .catch(() => {});
-        }
+        try {
+            media.currentTime = 0;
+            const playPromise = media.play();
+            if (playPromise && typeof playPromise.catch === "function") {
+                playPromise.catch(() => {});
+            }
+        } catch (_) {}
     }
 
     // =========================================================
@@ -956,7 +1071,7 @@
         panel.id = "vcp-panel";
         panel.innerHTML = `
         <span>🔊</span>
-        <span id="vcp-status" style="display: none; font-size: 11px; color: #ff6b6b; font-style: italic; margin-left: 2px;">No capable changes</span>
+        <span id="vcp-status" style="display: none; font-size: 11px; color: #ff6b6b; font-style: italic; margin-left: 2px;">No active media</span>
 
         <input
             type="range"
@@ -1184,7 +1299,7 @@
     // =========================================================
 
     function mountPanel() {
-        if (!isTopFrame || !panel) return;
+        if (!isPageEnabled() || !isTopFrame || !panel) return;
 
         const targetParent =
             document.fullscreenElement ||
@@ -1339,23 +1454,11 @@
                 ui.spdInput.disabled = true;
 
                 if (activeMedia && !isYouTubeAdActive()) {
-                    if (isYouTube) {
-                        const player =
-                            document.getElementById("movie_player") ||
-                            document.querySelector(".html5-video-player");
-
-                        if (player && typeof player.getPlaybackRate === "function") {
-                            const rate = player.getPlaybackRate();
-                            activeMedia.playbackRate = rate;
-                            activeMedia.defaultPlaybackRate = rate;
-                        } else {
-                            activeMedia.playbackRate = 1;
-                            activeMedia.defaultPlaybackRate = 1;
-                        }
-                    } else {
-                        activeMedia.playbackRate = 1;
-                        activeMedia.defaultPlaybackRate = 1;
-                    }
+                    const previousRate = originalPlaybackRates.get(activeMedia);
+                    const restoreRate = Number.isFinite(previousRate) ? previousRate : 1;
+                    activeMedia.playbackRate = restoreRate;
+                    activeMedia.defaultPlaybackRate = restoreRate;
+                    originalPlaybackRates.delete(activeMedia);
                 }
 
             } else {
@@ -1364,6 +1467,9 @@
                 customSpeed = parseFloat(ui.spdInput.value) || 3;
 
                 if (activeMedia) {
+                    if (!originalPlaybackRates.has(activeMedia)) {
+                        originalPlaybackRates.set(activeMedia, activeMedia.playbackRate || 1);
+                    }
                     applyMediaSettings(activeMedia, false);
                 }
             }
@@ -1390,8 +1496,9 @@
     // =========================================================
 
     function findAndSetActiveMedia() {
+        if (!isPageEnabled()) return;
         if (activeMedia && (!document.contains(activeMedia) || !isActuallyPlaying(activeMedia))) {
-            activeMedia.removeEventListener("timeupdate", checkLoop);
+            activeMedia.removeEventListener("ended", checkLoop);
             disconnectDetachedAudioGraph(activeMedia);
             activeMedia = null;
         }
@@ -1410,7 +1517,11 @@
     function togglePanel(show = !panelVisible) {
         panelVisible = show;
 
-        if (!ui) return;
+        if (!ui || !isPageEnabled()) {
+            if (panel) panel.style.display = "none";
+            panelVisible = false;
+            return;
+        }
         if (show) {
             findAndSetActiveMedia();
             const hasMedia = activeMedia && document.contains(activeMedia) && isActuallyPlaying(activeMedia);
@@ -1431,6 +1542,7 @@
         e => {
             const el = e.target;
 
+            if (!isPageEnabled()) return;
             if (
                 el &&
                 (
@@ -1462,25 +1574,33 @@
     let forceResumeTimer = null;
 
     function updateForceResumeTimer() {
+        if (!isPageEnabled()) {
+            if (forceResumeTimer !== null) {
+                clearInterval(forceResumeTimer);
+                forceResumeTimer = null;
+            }
+            return;
+        }
+
         const mediaExists = Boolean(
             activeMedia || document.querySelector("video, audio")
         );
 
         if (settings.forceResume && mediaExists && forceResumeTimer === null) {
             forceResumeTimer = setInterval(() => {
-                if (isYouTubeAdActive()) return;
+                if (!isPageEnabled() || isYouTubeAdActive()) return;
 
                 if (
                     activeMedia &&
                     (!document.contains(activeMedia) || activeMedia.ended)
                 ) {
-                    activeMedia.removeEventListener("timeupdate", checkLoop);
+                    activeMedia.removeEventListener("ended", checkLoop);
                     disconnectDetachedAudioGraph(activeMedia);
                     activeMedia = null;
                 }
 
                 if (activeMedia) {
-                    if (activeMedia.paused && !activeMedia.seeking) {
+                    if (activeMedia.paused && !activeMedia.seeking && !userPausedMedia.has(activeMedia)) {
                         resumeMedia(activeMedia);
                         if (isYouTube) resumeYouTube();
                     }
@@ -1496,7 +1616,7 @@
     }
 
     function refreshPanelFromSettings() {
-        if (!ui) return;
+        if (!ui || !isPageEnabled()) return;
         updateVolUI(settings.vol);
         ui.boost.checked = settings.enableBoost;
         ui.loop.checked = settings.loop;
@@ -1505,7 +1625,7 @@
     }
 
     function applySyncedSettings(value) {
-        if (!value || typeof value !== "object") return;
+        if (!isPageEnabled() || !value || typeof value !== "object") return;
         Object.assign(settings, normalizeSettings(value));
         refreshPanelFromSettings();
         updateForceResumeTimer();
@@ -1526,6 +1646,14 @@
     }
 
     window.addEventListener("pagehide", () => {
+        if (adRetryTimer !== null) {
+            clearInterval(adRetryTimer);
+            adRetryTimer = null;
+        }
+        if (adPlayerObserver) {
+            adPlayerObserver.disconnect();
+            adPlayerObserver = null;
+        }
         if (forceResumeTimer !== null) {
             clearInterval(forceResumeTimer);
             forceResumeTimer = null;
@@ -1537,8 +1665,11 @@
     });
 
     window.addEventListener("pageshow", () => {
-        updateForceResumeTimer();
-        if (isYouTube && isTopFrame) schedulePlayerBind();
+        if (isYouTube && isTopFrame) {
+            handleYouTubeRouteChange();
+        } else {
+            updateForceResumeTimer();
+        }
     });
 
 })();
