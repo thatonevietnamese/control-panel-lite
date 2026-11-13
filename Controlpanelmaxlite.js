@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.0.1
-// @description  Unified media controls with YouTube Home exclusion and stability fixes.
+// @version      1.1.0
+// @description  Unified media controls with event-driven YouTube Skip Ad detection and performance improvements.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -144,54 +144,21 @@
 
     const ADS_CONFIG = {
         debug: false,
-        maxSkipInterval: 250
+        retryDelay: 180
     };
 
     const ADS_SELECTORS = {
-        toHide: [
-            ".ytp-ad-message-container",
-            "ytd-player-legacy-desktop-watch-ads-renderer",
-            "ytd-ad-slot-renderer",
-            "#masthead-ad",
-            "tp-yt-paper-dialog:has(#feedback.ytd-enforcement-message-view-model)",
-            ".yt-mealbar-promo-renderer",
-            ".ytp-ad-player-overlay-layout__player-card-container",
-            ".ytp-ad-player-overlay-layout__ad-info-container",
-            ".ytp-ad-player-overlay-layout__ad-disclosure-banner-container",
-            ".ytp-ad-player-overlay",
-            ".ad-showing > video",
-            ".ad-interrupting > video",
-            "div:has(> div#banner)",
-            'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]',
-            "ytd-rich-item-renderer:has(ytd-ad-slot-renderer)",
-            "ytmusic-mealbar-promo-renderer",
-            "ytd-in-feed-ad-layout-renderer",
-            "#player-ads",
-            ".ytd-video-masthead-ad-v3-renderer",
-            "ytd-ad-selection-preview-renderer",
-            ".ytp-ad-image-overlay",
-            "#root.yt-chips-search-renderer-header-v2",
-            ".ytp-cued-thumbnail-overlay",
-            ".ytp-ad-avatar",
-            ".ytp-ad-button-vm"
-        ],
         player: ["#movie_player", ".html5-video-player"],
         skipButtons: [
             ".ytp-ad-skip-button-modern",
             ".ytp-skip-ad-button",
             ".ytp-ad-skip-button",
-            ".ytp-ad-skip-button-slot",
-            ".ytp-ad-skip-button-container"
+            ".ytp-ad-skip-button-slot button",
+            ".ytp-ad-skip-button-container button"
         ]
     };
 
-    const ADS_CLASSES = [
-        "ad-showing",
-        "ad-interrupting",
-        "ytp-ad-player-overlay",
-        "ytp-ad-display-override"
-    ];
-
+    const ADS_CLASSES = ["ad-showing", "ad-interrupting"];
     const ADS_QUERY = Object.fromEntries(
         Object.entries(ADS_SELECTORS).map(([key, values]) => [key, values.join(", ")])
     );
@@ -199,12 +166,10 @@
     let adPlayer = null;
     let adPlayerObserver = null;
     let adVideo = null;
-    let adSpinner = null;
-    let adCuedOverlay = null;
-    let adWasMuted = null;
-    let adPreviousRate = null;
     let adWasActive = false;
     let lastAdActionAt = 0;
+    let lastSkipButton = null;
+    let adCheckScheduled = false;
     let adRetryTimer = null;
     let adRetryCount = 0;
     let adStyleInjected = false;
@@ -234,48 +199,10 @@
         const style = document.createElement("style");
         style.id = "ymcs-ad-bypass-style";
         style.textContent = `
-            @keyframes ymcsAnimateSkip {
-                0% { transform: translate(-8px, 0); opacity: 0; }
-                25% { opacity: 1; }
-                75% { opacity: 1; }
-                100% { transform: translate(30px, 0); opacity: 0; }
-            }
-            ${ADS_QUERY.toHide} {
-                display: flex !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-                pointer-events: none !important;
-                height: 1px !important;
-                width: 1px !important;
-                overflow: hidden !important;
-            }
             ${ADS_QUERY.skipButtons} {
-                display: flex !important;
-                text-transform: uppercase !important;
                 border: 1px solid #fd0 !important;
-                background-color: rgba(255,230,50,0.65) !important;
-                box-shadow: 0 0 20px #fc0 !important;
-                overflow: hidden !important;
-            }
-            ${ADS_CLASSES.map(name => `.${name} .ytp-spinner-circle`).join(", ")} {
-                border-color: #fc0 #fc0 transparent !important;
-            }
-            .ytp-skip-ad, .ytp-prev-button, .ytp-next-button {
-                display: flex !important;
-            }
-            .ad-simple-attributed-string { visibility: hidden; }
-            .ad-simple-attributed-string::before {
-                content: "Wait or Press Skip";
-                display: flex !important;
-                visibility: visible;
-                color: white;
-                width: 100% !important;
-                justify-content: center !important;
-                white-space: nowrap !important;
-            }
-            .ytp-skip-ad-button__icon {
-                transform: translate(-8px, 0);
-                animation: 1s linear 0s infinite ymcsAnimateSkip;
+                background-color: rgba(255,230,50,0.22) !important;
+                box-shadow: 0 0 8px rgba(255,204,0,.35) !important;
             }
         `;
 
@@ -284,77 +211,66 @@
     }
 
     function restoreAfterAd() {
-        const media = adVideo;
-
-        if (media && media.isConnected) {
-            if (adWasMuted !== null && media.muted !== adWasMuted) {
-                media.muted = adWasMuted;
-            }
-            if (
-                adPreviousRate !== null &&
-                Math.abs(media.playbackRate - 2) < 0.01 &&
-                Number.isFinite(adPreviousRate)
-            ) {
-                media.playbackRate = adPreviousRate;
-            }
-        }
-
-        if (media && media.isConnected) {
-            setAdGraphMuted(media, false);
-        }
-
-        if (adSpinner) adSpinner.style.display = "none";
-        if (adCuedOverlay) adCuedOverlay.style.display = "none";
-
-        adWasMuted = null;
-        adPreviousRate = null;
         adWasActive = false;
-        adsLog("Ad state cleared; restored previous media settings");
+        lastSkipButton = null;
+        adsLog("Ad ended; normal playback was left untouched");
+    }
+
+    function findEnabledSkipButton(player) {
+        if (!player) return null;
+
+        const buttons = player.querySelectorAll(ADS_QUERY.skipButtons);
+        for (const button of buttons) {
+            const disabled =
+                button.disabled ||
+                button.getAttribute("aria-disabled") === "true" ||
+                button.hasAttribute("disabled");
+
+            const rect = button.getBoundingClientRect();
+            if (!disabled && rect.width > 0 && rect.height > 0) {
+                return button;
+            }
+        }
+        return null;
     }
 
     function performAdSkip() {
-        const media = adVideo;
         const player = adPlayer;
-        if (!media || !player || !media.isConnected) return;
+        if (!player || !player.isConnected || !isYouTubeAdActive()) return;
+
+        const skipButton = findEnabledSkipButton(player);
+        if (!skipButton || skipButton === lastSkipButton) return;
 
         const now = Date.now();
-        if (now - lastAdActionAt < ADS_CONFIG.maxSkipInterval) return;
+        if (now - lastAdActionAt < ADS_CONFIG.retryDelay) return;
+
         lastAdActionAt = now;
+        lastSkipButton = skipButton;
 
-        const overlay = player.querySelector(".ytp-ad-player-overlay-layout");
-        if (overlay) {
-            overlay.style.display = "";
-            overlay.removeAttribute("style");
+        try {
+            // Use only YouTube's real, enabled skip control.
+            // Do not seek to the end, pause, change speed, or click next-video controls.
+            skipButton.click();
+            adsLog("Clicked the enabled Skip Ad button");
+        } catch (error) {
+            lastSkipButton = null;
+            adsLog("Skip button click failed");
         }
-        if (adSpinner) adSpinner.style.display = "";
-        if (adCuedOverlay) adCuedOverlay.style.display = "none";
+    }
 
-        // Pause first, then seek. HTMLMediaElement.paused is read-only.
-        if (!media.paused) media.pause();
-        if (!media.muted) media.muted = true;
-        setAdGraphMuted(media, true);
+    function scheduleAdCheck() {
+        if (adCheckScheduled) return;
+        adCheckScheduled = true;
 
-        if (Math.abs(media.playbackRate - 2) > 0.01) {
-            media.playbackRate = 2;
-        }
+        const run = () => {
+            adCheckScheduled = false;
+            checkYouTubeAds();
+        };
 
-        if (
-            Number.isFinite(media.duration) &&
-            media.duration > 0 &&
-            media.currentTime < media.duration - 0.2
-        ) {
-            try {
-                media.currentTime = Math.max(0, media.duration - 0.1);
-            } catch (_) {}
-        }
-
-        const skipButton = player.querySelector(ADS_QUERY.skipButtons);
-        if (
-            skipButton &&
-            !skipButton.disabled &&
-            skipButton.getAttribute("aria-disabled") !== "true"
-        ) {
-            try { skipButton.click(); } catch (_) {}
+        if (typeof requestAnimationFrame === "function") {
+            requestAnimationFrame(run);
+        } else {
+            setTimeout(run, 0);
         }
     }
 
@@ -364,17 +280,15 @@
         if (!adVideo || !adVideo.isConnected || adVideo.parentElement !== adPlayer) {
             adVideo = adPlayer.querySelector("video");
         }
-        adSpinner = adPlayer.querySelector(".ytp-spinner");
-        adCuedOverlay = adPlayer.querySelector(".ytp-cued-thumbnail-overlay");
 
         const active = ADS_CLASSES.some(className => adPlayer.classList.contains(className));
 
         if (active) {
-            if (!adWasActive && adVideo) {
-                adWasMuted = adVideo.muted;
-                adPreviousRate = adVideo.playbackRate;
+            if (!adWasActive) {
+                adWasActive = true;
+                lastSkipButton = null;
+                adsLog("Ad detected");
             }
-            adWasActive = true;
             performAdSkip();
         } else if (adWasActive) {
             restoreAfterAd();
@@ -394,15 +308,18 @@
             }
 
             if (adWasActive) restoreAfterAd();
+
             adPlayer = nextPlayer;
             adVideo = adPlayer.querySelector("video");
-            adSpinner = adPlayer.querySelector(".ytp-spinner");
-            adCuedOverlay = adPlayer.querySelector(".ytp-cued-thumbnail-overlay");
 
-            adPlayerObserver = new MutationObserver(checkYouTubeAds);
+            // Observe only the player subtree. This catches ad-state changes
+            // and the moment YouTube inserts/enables its Skip Ad button.
+            adPlayerObserver = new MutationObserver(scheduleAdCheck);
             adPlayerObserver.observe(adPlayer, {
+                subtree: true,
+                childList: true,
                 attributes: true,
-                attributeFilter: ["class"]
+                attributeFilter: ["class", "aria-disabled", "disabled"]
             });
         }
 
@@ -419,48 +336,9 @@
     let injectLanguageStyle = null;
 
     if (isYouTube && isTopFrame) {
-        const language = (navigator.language || "en").slice(0, 2);
-        const waitText = {
-            ar: "انتظر أو اضغط تخطي",
-            bn: "অপেক্ষা করুন বা স্কিপ টিপুন",
-            cs: "Počkejte nebo klikněte na Přeskočit",
-            de: "Warten oder Überspringen",
-            el: "Περιμένετε ή πατήστε Παράλειψη",
-            en: "Wait or Press Skip",
-            es: "Espera o Presiona Saltar",
-            fa: "منتظر بمانید یا رد کردن را فشار دهید",
-            fr: "Attendre ou Passer",
-            he: "המתן או לחץ על דילוג",
-            hi: "प्रतीक्षा करें या छोड़ें दबाएं",
-            hu: "Várjon vagy nyomja meg a Kihagyást",
-            id: "Tunggu atau Tekan Lewati",
-            it: "Aspetta o Premi Salta",
-            ja: "待つかスキップを押す",
-            ko: "기다리거나 건너뛰기 누르기",
-            nl: "Wacht of druk op Overslaan",
-            pl: "Czekaj lub naciśnij Pomiń",
-            pt: "Aguarde ou Pressione Pular",
-            ro: "Așteaptă sau apasă Sari",
-            ru: "Подождите или нажмите Пропустить",
-            sv: "Vänta eller tryck på Hoppa över",
-            th: "รอหรือกดข้าม",
-            tr: "Bekleyin veya Atla Tuşuna Basın",
-            uk: "Зачекайте або натисніть Пропустити",
-            vi: "Chờ hoặc nhấn Bỏ qua",
-            zh: "等待或点击跳过"
-        }[language] || "Wait or Press Skip";
-
-        // Keep the UI text localized without building a second stylesheet.
         injectLanguageStyle = () => {
             if (!isPageEnabled()) return;
             injectAdsStyles();
-            const style = document.getElementById("ymcs-ad-bypass-style");
-            if (style && waitText !== "Wait or Press Skip") {
-                style.textContent = style.textContent.replace(
-                    'content: "Wait or Press Skip";',
-                    `content: ${JSON.stringify(waitText)};`
-                );
-            }
         };
 
         if (document.readyState === "loading") {
