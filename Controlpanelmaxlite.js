@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.1.0
+// @version      1.1.1
 // @description  Unified media controls with event-driven YouTube Skip Ad detection and performance improvements.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
@@ -144,7 +144,10 @@
 
     const ADS_CONFIG = {
         debug: false,
-        retryDelay: 180
+        // First click is immediate. If YouTube ignores it, retry the same
+        // still-visible button instead of permanently blacklisting the node.
+        retryDelay: 260,
+        retryInterval: 180
     };
 
     const ADS_SELECTORS = {
@@ -165,12 +168,15 @@
 
     let adPlayer = null;
     let adPlayerObserver = null;
+    let playerDiscoveryObserver = null;
     let adVideo = null;
     let adWasActive = false;
     let lastAdActionAt = 0;
     let lastSkipButton = null;
     let adCheckScheduled = false;
+    let playerBindScheduled = false;
     let adRetryTimer = null;
+    let adSkipRetryTimer = null;
     let adRetryCount = 0;
     let adStyleInjected = false;
 
@@ -178,6 +184,27 @@
         if (ADS_CONFIG.debug) {
             console.debug("[Media Control Suite / Ads]", message);
         }
+    }
+
+    function stopAdSkipRetry() {
+        if (adSkipRetryTimer !== null) {
+            clearInterval(adSkipRetryTimer);
+            adSkipRetryTimer = null;
+        }
+    }
+
+    function startAdSkipRetry() {
+        if (adSkipRetryTimer !== null) return;
+
+        // Poll only while an ad is active. MutationObserver remains the
+        // primary instant trigger; this catches delayed/ignored button clicks.
+        adSkipRetryTimer = setInterval(() => {
+            if (!isPageEnabled() || !adPlayer || !adPlayer.isConnected) {
+                stopAdSkipRetry();
+                return;
+            }
+            checkYouTubeAds();
+        }, ADS_CONFIG.retryInterval);
     }
 
     function isYouTubeAdActive() {
@@ -211,8 +238,10 @@
     }
 
     function restoreAfterAd() {
+        stopAdSkipRetry();
         adWasActive = false;
         lastSkipButton = null;
+        lastAdActionAt = 0;
         adsLog("Ad ended; normal playback was left untouched");
     }
 
@@ -226,8 +255,17 @@
                 button.getAttribute("aria-disabled") === "true" ||
                 button.hasAttribute("disabled");
 
+            if (disabled || button.hidden || button.getAttribute("aria-hidden") === "true") {
+                continue;
+            }
+
+            const style = window.getComputedStyle(button);
+            if (style.display === "none" || style.visibility === "hidden") {
+                continue;
+            }
+
             const rect = button.getBoundingClientRect();
-            if (!disabled && rect.width > 0 && rect.height > 0) {
+            if (rect.width > 0 && rect.height > 0 && button.isConnected) {
                 return button;
             }
         }
@@ -239,22 +277,23 @@
         if (!player || !player.isConnected || !isYouTubeAdActive()) return;
 
         const skipButton = findEnabledSkipButton(player);
-        if (!skipButton || skipButton === lastSkipButton) return;
+        if (!skipButton) return;
 
         const now = Date.now();
+        // Do not blacklist a button after one click. Some player builds keep
+        // the same DOM node when the first synthetic click is ignored.
         if (now - lastAdActionAt < ADS_CONFIG.retryDelay) return;
 
         lastAdActionAt = now;
         lastSkipButton = skipButton;
 
         try {
-            // Use only YouTube's real, enabled skip control.
-            // Do not seek to the end, pause, change speed, or click next-video controls.
+            // Only activate YouTube's own visible, enabled Skip Ad control.
+            // Never seek, alter playback speed, or click unrelated controls.
             skipButton.click();
-            adsLog("Clicked the enabled Skip Ad button");
+            adsLog("Clicked/retried the enabled Skip Ad button");
         } catch (error) {
-            lastSkipButton = null;
-            adsLog("Skip button click failed");
+            adsLog("Skip button click failed; it will be retried");
         }
     }
 
@@ -287,9 +326,13 @@
             if (!adWasActive) {
                 adWasActive = true;
                 lastSkipButton = null;
+                lastAdActionAt = 0;
                 adsLog("Ad detected");
             }
+
+            // Try immediately, then retry briefly while the ad remains active.
             performAdSkip();
+            startAdSkipRetry();
         } else if (adWasActive) {
             restoreAfterAd();
         }
@@ -299,7 +342,18 @@
         if (!isPageEnabled() || !isYouTube || !isTopFrame) return false;
 
         const nextPlayer = document.querySelector(ADS_QUERY.player);
-        if (!nextPlayer) return false;
+        if (!nextPlayer) {
+            if (adPlayer && !adPlayer.isConnected) {
+                if (adPlayerObserver) {
+                    adPlayerObserver.disconnect();
+                    adPlayerObserver = null;
+                }
+                if (adWasActive) restoreAfterAd();
+                adPlayer = null;
+                adVideo = null;
+            }
+            return false;
+        }
 
         if (nextPlayer !== adPlayer) {
             if (adPlayerObserver) {
@@ -311,15 +365,20 @@
 
             adPlayer = nextPlayer;
             adVideo = adPlayer.querySelector("video");
+        }
 
-            // Observe only the player subtree. This catches ad-state changes
-            // and the moment YouTube inserts/enables its Skip Ad button.
+        // Reattach when a page is restored from BFCache or pagehide cleanup
+        // disconnected the observer while the player DOM itself stayed alive.
+        if (!adPlayerObserver) {
             adPlayerObserver = new MutationObserver(scheduleAdCheck);
             adPlayerObserver.observe(adPlayer, {
                 subtree: true,
                 childList: true,
                 attributes: true,
-                attributeFilter: ["class", "aria-disabled", "disabled"]
+                attributeFilter: [
+                    "class", "aria-disabled", "disabled", "hidden",
+                    "aria-hidden", "style"
+                ]
             });
         }
 
@@ -328,9 +387,57 @@
     }
 
     function schedulePlayerBind() {
-        if (!isPageEnabled() || !isYouTube || !isTopFrame) return;
-        setTimeout(bindYouTubePlayer, 0);
-        setTimeout(bindYouTubePlayer, 250);
+        if (!isPageEnabled() || !isYouTube || !isTopFrame || playerBindScheduled) return;
+        playerBindScheduled = true;
+
+        setTimeout(() => {
+            playerBindScheduled = false;
+            bindYouTubePlayer();
+        }, 0);
+    }
+
+    function observeForYouTubePlayer() {
+        if (!isPageEnabled() || !isYouTube || !isTopFrame || playerDiscoveryObserver) return;
+
+        // YouTube can replace the player root after SPA navigation. Inspect
+        // only added/removed subtrees that could contain the player, rather
+        // than scheduling a bind for every unrelated page mutation.
+        const root = document.documentElement || document;
+        playerDiscoveryObserver = new MutationObserver(records => {
+            if (!isPageEnabled()) return;
+
+            let playerMayHaveChanged = false;
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    if (node.matches(ADS_QUERY.player) || node.querySelector(ADS_QUERY.player)) {
+                        playerMayHaveChanged = true;
+                        break;
+                    }
+                }
+
+                if (!playerMayHaveChanged && adPlayer) {
+                    for (const node of record.removedNodes) {
+                        if (node === adPlayer || (node.nodeType === 1 && node.contains(adPlayer))) {
+                            playerMayHaveChanged = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (playerMayHaveChanged) break;
+            }
+
+            if (playerMayHaveChanged) schedulePlayerBind();
+        });
+        playerDiscoveryObserver.observe(root, { childList: true, subtree: true });
+    }
+
+    function stopPlayerDiscoveryObserver() {
+        if (playerDiscoveryObserver) {
+            playerDiscoveryObserver.disconnect();
+            playerDiscoveryObserver = null;
+        }
     }
 
     let injectLanguageStyle = null;
@@ -347,6 +454,7 @@
             injectLanguageStyle();
         }
 
+        observeForYouTubePlayer();
         window.addEventListener("yt-navigate-finish", handleYouTubeRouteChange);
         window.addEventListener("yt-page-data-updated", handleYouTubeRouteChange);
         window.addEventListener("load", bindYouTubePlayer, { once: true });
@@ -375,6 +483,9 @@
                 clearInterval(adRetryTimer);
                 adRetryTimer = null;
             }
+            stopAdSkipRetry();
+            stopPlayerDiscoveryObserver();
+
             if (adPlayerObserver) {
                 adPlayerObserver.disconnect();
                 adPlayerObserver = null;
@@ -409,6 +520,7 @@
         }
 
         pageEnabled = true;
+        observeForYouTubePlayer();
         if (injectLanguageStyle) injectLanguageStyle();
         schedulePlayerBind();
         mountPanel();
@@ -1532,6 +1644,8 @@
             adPlayerObserver.disconnect();
             adPlayerObserver = null;
         }
+        stopAdSkipRetry();
+        stopPlayerDiscoveryObserver();
         if (forceResumeTimer !== null) {
             clearInterval(forceResumeTimer);
             forceResumeTimer = null;
