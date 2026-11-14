@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.1.1
-// @description  Unified media controls with event-driven YouTube Skip Ad detection and performance improvements.
+// @version      1.1.2
+// @description  Aggressive YouTube Skip Ad retries; media controls run on YouTube Watch/Shorts only.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -78,22 +78,28 @@
         }
     })();
 
-    function isYouTubeHome() {
-        if (!isYouTube) return false;
+    function isYouTubeMediaRoute() {
+        if (!isYouTube) return true;
 
+        // In YouTube's own SPA, use the top-level route so child frames follow
+        // the same Watch/Shorts-only rule. On other sites, an embedded player
+        // is not treated as a YouTube menu page.
+        let pathname = location.pathname;
         try {
-            const topLocation = window.top.location;
-            return /(^|\\.)youtube\\.com$/i.test(topLocation.hostname) &&
-                topLocation.pathname === "/";
-        } catch (_) {
-            return isTopFrame && location.pathname === "/";
-        }
+            const topURL = new URL(window.top.location.href);
+            if (/(^|\.)youtube\.com$/i.test(topURL.hostname)) {
+                pathname = topURL.pathname;
+            }
+        } catch (_) {}
+
+        return pathname === "/watch" || /^\/shorts(?:\/|$)/i.test(pathname);
     }
 
-    // Keep only the lightweight SPA route watcher alive on YouTube Home.
-    let pageEnabled = !isYouTubeHome();
+    // On YouTube, the whole suite is active only on Watch and Shorts routes.
+    // The small route listeners remain alive so SPA navigation can re-enable it.
+    let pageEnabled = !isYouTube || isYouTubeMediaRoute();
     function isPageEnabled() {
-        return pageEnabled && !isYouTubeHome();
+        return pageEnabled && (!isYouTube || isYouTubeMediaRoute());
     }
 
     // Shared per-frame audio graph registry. WeakMap avoids retaining media elements.
@@ -146,8 +152,9 @@
         debug: false,
         // First click is immediate. If YouTube ignores it, retry the same
         // still-visible button instead of permanently blacklisting the node.
-        retryDelay: 260,
-        retryInterval: 180
+        // Intentionally aggressive: retry frequently while an ad is active.
+        retryDelay: 110,
+        retryInterval: 90
     };
 
     const ADS_SELECTORS = {
@@ -157,7 +164,9 @@
             ".ytp-skip-ad-button",
             ".ytp-ad-skip-button",
             ".ytp-ad-skip-button-slot button",
-            ".ytp-ad-skip-button-container button"
+            ".ytp-ad-skip-button-container button",
+            ".ytp-ad-skip-button-slot [role=\"button\"]",
+            ".ytp-ad-skip-button-container [role=\"button\"]"
         ]
     };
 
@@ -245,9 +254,10 @@
         adsLog("Ad ended; normal playback was left untouched");
     }
 
-    function findEnabledSkipButton(player) {
-        if (!player) return null;
+    function findEnabledSkipButtons(player) {
+        if (!player) return [];
 
+        const found = [];
         const buttons = player.querySelectorAll(ADS_QUERY.skipButtons);
         for (const button of buttons) {
             const disabled =
@@ -260,41 +270,45 @@
             }
 
             const style = window.getComputedStyle(button);
-            if (style.display === "none" || style.visibility === "hidden") {
+            if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") {
                 continue;
             }
 
             const rect = button.getBoundingClientRect();
             if (rect.width > 0 && rect.height > 0 && button.isConnected) {
-                return button;
+                found.push(button);
             }
         }
-        return null;
+        return found;
     }
 
     function performAdSkip() {
         const player = adPlayer;
         if (!player || !player.isConnected || !isYouTubeAdActive()) return;
 
-        const skipButton = findEnabledSkipButton(player);
-        if (!skipButton) return;
+        const skipButtons = findEnabledSkipButtons(player);
+        if (skipButtons.length === 0) return;
 
         const now = Date.now();
-        // Do not blacklist a button after one click. Some player builds keep
-        // the same DOM node when the first synthetic click is ignored.
+        // Keep retrying even when YouTube reuses the exact same button node.
         if (now - lastAdActionAt < ADS_CONFIG.retryDelay) return;
 
         lastAdActionAt = now;
-        lastSkipButton = skipButton;
+        lastSkipButton = skipButtons[0];
 
-        try {
-            // Only activate YouTube's own visible, enabled Skip Ad control.
-            // Never seek, alter playback speed, or click unrelated controls.
-            skipButton.click();
-            adsLog("Clicked/retried the enabled Skip Ad button");
-        } catch (error) {
-            adsLog("Skip button click failed; it will be retried");
+        let clicked = false;
+        for (const button of skipButtons) {
+            try {
+                // Only activate visible, enabled Skip Ad controls supplied by YouTube.
+                // No seeking, playback-speed changes, or unrelated player controls.
+                button.click();
+                clicked = true;
+            } catch (_) {}
         }
+
+        adsLog(clicked
+            ? `Clicked ${skipButtons.length} visible Skip Ad control(s)`
+            : "Skip button click failed; it will be retried");
     }
 
     function scheduleAdCheck() {
@@ -440,6 +454,20 @@
         }
     }
 
+    function startPlayerBindRetries() {
+        if (!isPageEnabled() || !isYouTube || !isTopFrame || adRetryTimer !== null) return;
+
+        adRetryCount = 0;
+        adRetryTimer = setInterval(() => {
+            adRetryCount += 1;
+            const ready = bindYouTubePlayer();
+            if (ready || adRetryCount >= 24 || !isPageEnabled()) {
+                clearInterval(adRetryTimer);
+                adRetryTimer = null;
+            }
+        }, 350);
+    }
+
     let injectLanguageStyle = null;
 
     if (isYouTube && isTopFrame) {
@@ -459,22 +487,13 @@
         window.addEventListener("yt-page-data-updated", handleYouTubeRouteChange);
         window.addEventListener("load", bindYouTubePlayer, { once: true });
 
-        if (isPageEnabled()) {
-            adRetryTimer = setInterval(() => {
-                adRetryCount += 1;
-                const ready = bindYouTubePlayer();
-                if (ready || adRetryCount >= 14 || !isPageEnabled()) {
-                    clearInterval(adRetryTimer);
-                    adRetryTimer = null;
-                }
-            }, 750);
-        }
+        startPlayerBindRetries();
     }
 
     function handleYouTubeRouteChange() {
         if (!isYouTube || !isTopFrame) return;
 
-        if (isYouTubeHome()) {
+        if (!isYouTubeMediaRoute()) {
             pageEnabled = false;
             panelVisible = false;
             if (panel) panel.style.display = "none";
@@ -520,6 +539,7 @@
         }
 
         pageEnabled = true;
+        startPlayerBindRetries();
         observeForYouTubePlayer();
         if (injectLanguageStyle) injectLanguageStyle();
         schedulePlayerBind();
