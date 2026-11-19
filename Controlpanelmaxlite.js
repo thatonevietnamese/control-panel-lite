@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.3
-// @description  Unified media controls strictly active on YouTube watch/shorts and other sites.
+// @version      1.4.1
+// @description  Unified media controls with selectable YouTube ad skip modes on Watch/Shorts.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @match        *://*/*
@@ -27,13 +27,15 @@
         loop: false,
         forceResume: false,
         q: "auto",
-        enableBoost: false
+        enableBoost: false,
+        adMode: "instant"
     };
 
     const VALID_QUALITIES = new Set([
         "auto", "tiny", "small", "medium", "large",
         "hd720", "hd1080", "hd1440", "hd2160"
     ]);
+    const VALID_AD_MODES = new Set(["none", "normal", "instant"]);
 
     function normalizeSettings(value) {
         const raw = value && typeof value === "object" ? value : {};
@@ -46,7 +48,10 @@
             loop: Boolean(raw.loop),
             forceResume: Boolean(raw.forceResume),
             q: VALID_QUALITIES.has(raw.q) ? raw.q : "auto",
-            enableBoost: Boolean(raw.enableBoost)
+            enableBoost: Boolean(raw.enableBoost),
+            adMode: VALID_AD_MODES.has(raw.adMode)
+                ? raw.adMode
+                : DEFAULT_SETTINGS.adMode
         };
     }
 
@@ -82,20 +87,41 @@
         if (!isYouTube) return true;
 
         try {
-            const topLocation = window.top.location;
-            const pathname = topLocation.pathname;
-            return pathname.includes('/watch') || pathname.includes('/shorts');
+            const pathname = window.top.location.pathname;
+            return pathname === "/watch" || pathname === "/shorts" || pathname.startsWith("/shorts/");
         } catch (_) {
             const pathname = location.pathname;
-            return pathname.includes('/watch') || pathname.includes('/shorts');
+            return pathname === "/watch" || pathname === "/shorts" || pathname.startsWith("/shorts/");
         }
     }
 
-    // Keep only the lightweight SPA route watcher alive outside YouTube watch/shorts.
-    let pageEnabled = isTargetYouTubePage();
+    function isYouTubeChildFrame() {
+        if (isTopFrame) return false;
+
+        // Same-origin YouTube subframes must never run the generic media
+        // controller. Cross-origin ad frames are identified by their referrer
+        // when the browser exposes it; otherwise the frame remains isolated
+        // from the top-frame ad controller by the top-frame-only checks.
+        if (isYouTube) return true;
+
+        try {
+            const referrer = document.referrer ? new URL(document.referrer) : null;
+            return Boolean(referrer && /(^|\.)youtube\.com$/i.test(referrer.hostname));
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // The YouTube controller belongs only to the top-level Watch/Shorts page.
+    // Do not let ad creatives in child frames receive normal media speed/volume
+    // settings intended for the main content video.
+    let pageEnabled = isYouTube
+        ? (isTopFrame && isTargetYouTubePage())
+        : !isYouTubeChildFrame();
+
     function isPageEnabled() {
         if (isYouTube) {
-            return isTargetYouTubePage();
+            return isTopFrame && isTargetYouTubePage();
         }
         return pageEnabled;
     }
@@ -148,14 +174,16 @@
 
     const ADS_CONFIG = {
         debug: false,
-        retryInterval: 180,
-        clickCooldown: 500,
-        observerDebounce: 45
+        retryInterval: 100,
+        clickInterval: 100,
+        seekRetryInterval: 450,
+        seekEndOffset: 0.5,
+        normalPlaybackRate: 20
     };
 
     const ADS_SELECTORS = {
-        // Hide only ad-specific UI. Do not hide the video, player overlay,
-        // skip-button parents, or the normal cued-thumbnail overlay.
+        // Hide ad-specific decorations only. Keep the player, video,
+        // skip-button containers, and normal player overlays intact.
         toHide: [
             ".ytp-ad-message-container",
             "ytd-player-legacy-desktop-watch-ads-renderer",
@@ -178,22 +206,25 @@
         ],
         player: ["#movie_player", ".html5-video-player"],
         skipButtons: [
+            "button.ytp-ad-skip-button-modern",
+            ".ytp-ad-skip-button-modern[role='button']",
+            "button.ytp-skip-ad-button",
+            ".ytp-skip-ad-button[role='button']",
+            "button.ytp-ad-skip-button",
+            ".ytp-ad-skip-button[role='button']",
+            ".ytp-ad-skip-button-slot button",
+            ".ytp-ad-skip-button-slot [role='button']",
+            ".ytp-ad-skip-button-container button",
+            ".ytp-ad-skip-button-container [role='button']",
             ".ytp-ad-skip-button-modern",
             ".ytp-skip-ad-button",
-            ".ytp-ad-skip-button",
-            ".ytp-ad-skip-button-slot",
-            ".ytp-ad-skip-button-container",
-            'button[aria-label*="skip" i]',
-            '[role="button"][aria-label*="skip" i]'
+            ".ytp-ad-skip-button"
         ]
     };
 
-    // Only use YouTube's explicit in-stream ad states to avoid muting normal
-    // playback for companion/display overlays.
-    const ADS_CLASSES = [
-        "ad-showing",
-        "ad-interrupting"
-    ];
+    // These are the explicit in-stream ad states. Overlay-only states are
+    // deliberately excluded so ordinary videos are never muted by mistake.
+    const ADS_CLASSES = ["ad-showing", "ad-interrupting"];
 
     const ADS_QUERY = Object.fromEntries(
         Object.entries(ADS_SELECTORS).map(([key, values]) => [key, values.join(", ")])
@@ -203,14 +234,16 @@
     let adPlayerObserver = null;
     let playerDiscoveryObserver = null;
     let adVideo = null;
-    let adWasMuted = null;
     let adWasActive = false;
     let lastSkipAttemptAt = 0;
-    let lastClickedSkipButton = null;
+    let lastAdSeekAt = 0;
     let adRetryTimer = null;
-    let adCheckTimer = null;
     let playerBindTimer = null;
     let adStyleInjected = false;
+
+    // Store state per media element so replacing the video during an ad does
+    // not overwrite the mute/rate values belonging to the previous element.
+    const adMediaStates = new WeakMap();
 
     function adsLog(message) {
         if (ADS_CONFIG.debug) {
@@ -218,25 +251,51 @@
         }
     }
 
+    function findYouTubePlayer() {
+        const candidates = document.querySelectorAll(ADS_QUERY.player);
+        for (const candidate of candidates) {
+            if (ADS_CLASSES.some(name => candidate.classList.contains(name))) {
+                return candidate;
+            }
+            const nestedActive = candidate.querySelector(
+                ADS_CLASSES.map(name => `.html5-video-player.${name}, #movie_player.${name}`).join(", ")
+            );
+            if (nestedActive) return candidate;
+        }
+        return document.getElementById("movie_player") ||
+            document.querySelector(".html5-video-player");
+    }
+
     function hasYouTubeAdState(player) {
-        return Boolean(
-            player &&
-            ADS_CLASSES.some(className => player.classList.contains(className))
-        );
+        if (!player) return false;
+        if (ADS_CLASSES.some(name => player.classList.contains(name))) return true;
+
+        // Some YouTube layouts put the state class on the inner player node.
+        for (const name of ADS_CLASSES) {
+            if (player.querySelector(`#movie_player.${name}, .html5-video-player.${name}`)) {
+                return true;
+            }
+        }
+
+        // A real in-player Skip control is also an unambiguous ad signal and
+        // covers experiments that rename/remove the usual ad-state classes.
+        try {
+            if (player.querySelector(ADS_SELECTORS.skipButtons.join(", "))) return true;
+        } catch (_) {}
+        return false;
     }
 
     function isYouTubeAdActive() {
         if (!isPageEnabled() || !isYouTube || !isTopFrame) return false;
-
-        const player = adPlayer && adPlayer.isConnected
-            ? adPlayer
-            : document.querySelector(ADS_QUERY.player);
-
+        const player = adPlayer && adPlayer.isConnected ? adPlayer : findYouTubePlayer();
         return hasYouTubeAdState(player);
     }
 
     function injectAdsStyles() {
-        if (!isPageEnabled() || !isYouTube || !isTopFrame || adStyleInjected) return;
+        if (
+            !isPageEnabled() || !isYouTube || !isTopFrame ||
+            settings.adMode === "none" || adStyleInjected
+        ) return;
 
         const scopedSkipSelectors = ADS_SELECTORS.skipButtons
             .flatMap(selector => [
@@ -268,38 +327,131 @@
         adStyleInjected = true;
     }
 
+    function removeAdsStyles() {
+        const style = document.getElementById("ymcs-ad-bypass-style");
+        if (style) style.remove();
+        adStyleInjected = false;
+    }
+
+    function safeSetPlaybackRate(media, rate) {
+        if (!media || !Number.isFinite(rate) || rate <= 0) return;
+        try {
+            if (Math.abs(media.playbackRate - rate) > 0.01) media.playbackRate = rate;
+        } catch (_) {}
+    }
+
+    function safeSetDefaultPlaybackRate(media, rate) {
+        if (!media || !Number.isFinite(rate) || rate <= 0) return;
+        try {
+            if (Math.abs(media.defaultPlaybackRate - rate) > 0.01) {
+                media.defaultPlaybackRate = rate;
+            }
+        } catch (_) {}
+    }
+
+    function setAdPlaybackRate(media, requestedRate) {
+        if (!media || !Number.isFinite(requestedRate) || requestedRate <= 0) return;
+
+        // Some browsers reject 20x with NotSupportedError (Chromium's tested
+        // HTMLMediaElement ceiling is 16x). Try the requested value first,
+        // then fall back to 16x instead of silently leaving the ad at 1x/2x.
+        try {
+            media.playbackRate = requestedRate;
+        } catch (_) {
+            try { media.playbackRate = 16; } catch (_) {}
+        }
+
+        const appliedRate = Number.isFinite(media.playbackRate) && media.playbackRate > 0
+            ? media.playbackRate
+            : Math.min(requestedRate, 16);
+
+        try {
+            media.defaultPlaybackRate = requestedRate;
+        } catch (_) {
+            try { media.defaultPlaybackRate = appliedRate; } catch (_) {}
+        }
+    }
+
     function restoreAdVideo(media = adVideo) {
-        if (media) {
+        if (!media) return;
+
+        const state = adMediaStates.get(media);
+        if (state) {
+            // Restore only if the element is still in the state imposed by this
+            // script. This avoids overwriting a user's explicit mute change.
             try {
-                if (adWasMuted !== null && media.muted !== adWasMuted) {
-                    media.muted = adWasMuted;
+                if (media.muted === true) media.muted = state.muted;
+            } catch (_) {}
+
+            let restoreRate = state.playbackRate;
+            let restoreDefaultRate = state.defaultPlaybackRate;
+
+            if (state.wasSpeedForced) {
+                if (isSpeedForced) {
+                    restoreRate = Math.max(0.1, Math.min(5, customSpeed));
+                    restoreDefaultRate = restoreRate;
+                } else if (Number.isFinite(state.originalForcedRate)) {
+                    // The speed override was disabled while the ad was active.
+                    restoreRate = state.originalForcedRate;
+                    restoreDefaultRate = state.originalForcedRate;
+                    originalPlaybackRates.delete(media);
                 }
-            } catch (_) {}
+            }
 
-            try {
-                setAdGraphMuted(media, false);
-            } catch (_) {}
+            safeSetPlaybackRate(media, restoreRate);
+            safeSetDefaultPlaybackRate(media, restoreDefaultRate);
+            adMediaStates.delete(media);
         }
 
-        if (media === adVideo || !media) {
-            adVideo = null;
-            adWasMuted = null;
+        try {
+            setAdGraphMuted(media, false);
+        } catch (_) {}
+
+        if (media === adVideo) adVideo = null;
+
+        // Re-apply current speed/volume/boost settings after the ad. Settings
+        // can be changed while the ad is muted, when normal media handling is
+        // intentionally suspended.
+        if (media === activeMedia && !isYouTubeAdActive()) {
+            try { applyMediaSettings(media, true); } catch (_) {}
         }
+    }
+
+    function enforceAdVideoState(media) {
+        if (!media || settings.adMode === "none") return;
+
+        if (!adMediaStates.has(media)) {
+            adMediaStates.set(media, {
+                muted: Boolean(media.muted),
+                playbackRate: Number.isFinite(media.playbackRate) ? media.playbackRate : 1,
+                defaultPlaybackRate: Number.isFinite(media.defaultPlaybackRate)
+                    ? media.defaultPlaybackRate
+                    : 1,
+                wasSpeedForced: originalPlaybackRates.has(media),
+                originalForcedRate: originalPlaybackRates.get(media)
+            });
+        }
+
+        // Mute synchronously as soon as the ad state is detected.
+        try {
+            if (!media.muted) media.muted = true;
+        } catch (_) {}
+        setAdGraphMuted(media, true);
+
+        // Normal: accelerate the ad. Instant: keep it at 1x while the
+        // controlled near-end seek + Skip-button retry loop does the work.
+        const targetRate = settings.adMode === "normal"
+            ? ADS_CONFIG.normalPlaybackRate
+            : 1;
+        setAdPlaybackRate(media, targetRate);
     }
 
     function trackAdVideo(media) {
         if (media !== adVideo) {
             if (adVideo) restoreAdVideo(adVideo);
             adVideo = media || null;
-            adWasMuted = media ? Boolean(media.muted) : null;
         }
-
-        if (!media) return;
-
-        try {
-            if (!media.muted) media.muted = true;
-            setAdGraphMuted(media, true);
-        } catch (_) {}
+        if (media) enforceAdVideoState(media);
     }
 
     function stopAdRetryLoop() {
@@ -316,11 +468,11 @@
 
     function restoreAfterAd() {
         stopAdRetryLoop();
-        restoreAdVideo();
+        if (adVideo) restoreAdVideo(adVideo);
         adWasActive = false;
-        lastClickedSkipButton = null;
         lastSkipAttemptAt = 0;
-        adsLog("Ad state cleared; restored the previous mute state");
+        lastAdSeekAt = 0;
+        adsLog("Ad ended; restored the media state");
     }
 
     function isElementVisible(element, player) {
@@ -328,7 +480,6 @@
 
         try {
             if (element.getClientRects().length === 0) return false;
-
             for (let node = element; node && node !== player; node = node.parentElement) {
                 const style = window.getComputedStyle(node);
                 if (
@@ -343,12 +494,15 @@
         } catch (_) {
             return false;
         }
-
         return true;
     }
 
     function isSkipButtonUsable(button, player) {
         if (!button || !player || !player.contains(button)) return false;
+        const knownSkipControl = button.matches(
+            ".ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button"
+        );
+        if (!button.matches("button, [role='button']") && !knownSkipControl) return false;
         if (button.disabled || button.getAttribute("aria-disabled") === "true") return false;
         if (button.closest('[aria-disabled="true"]')) return false;
         return isElementVisible(button, player);
@@ -369,22 +523,45 @@
                 const button = match.matches("button, [role='button']")
                     ? match
                     : (match.querySelector("button, [role='button']") || match);
-
                 if (isSkipButtonUsable(button, player)) return button;
             }
         }
 
-        // Fallback for YouTube experiments that change class names but retain
-        // an accessible/localized skip label. Search only inside the active player.
-        const skipLabel = /^(skip(?:\s+ad|\s+ads)?|bỏ qua(?:\s+quảng cáo)?|lewati(?:\s+iklan)?|langkau(?:\s+iklan)?|pular(?:\s+anúncio)?|saltar(?:\s+anuncio)?|omitir(?:\s+anuncio)?|ignorer|passer(?:\s+la\s+publicité)?|überspringen|пропустить(?:\s+рекламу)?|تخطي(?:\s+الإعلان)?|跳过广告|広告をスキップ|광고 건너뛰기|ข้ามโฆษณา)/i;
+        // Class names can change during YouTube experiments. The fallback
+        // accepts localized ad-skip labels, but not unrelated "skip forward".
+        const labelPatterns = [
+            /^skip(?:\s+ads?)?$/i,
+            /\bskip\s+ads?\b/i,
+            /^bỏ qua(?:\s+quảng cáo)?$/i,
+            /^lewati(?:\s+iklan)?$/i,
+            /^langkau(?:\s+iklan)?$/i,
+            /^pular(?:\s+anúncio)?$/i,
+            /^saltar(?:\s+anuncio)?$/i,
+            /^ignorer(?:\s+la\s+publicité)?$/i,
+            /^passer(?:\s+la\s+publicité)?$/i,
+            /^überspringen$/i,
+            /^пропустить(?:\s+рекламу)?$/i,
+            /^تخطي(?:\s+الإعلان)?$/i,
+            /^跳过广告$/,
+            /^広告をスキップ$/,
+            /^광고 건너뛰기$/,
+            /^ข้ามโฆษณา$/,
+            /^reklamı atla$/i,
+            /^pomiń reklamę$/i,
+            /^विज्ञापन छोड़ें$/
+        ];
+
         for (const button of player.querySelectorAll("button, [role='button']")) {
-            const label = [
+            const labels = [
                 button.getAttribute("aria-label"),
                 button.getAttribute("title"),
                 button.textContent
-            ].filter(Boolean).join(" ").trim();
+            ].filter(Boolean).map(value => value.replace(/\s+/g, " ").trim());
 
-            if (skipLabel.test(label) && isSkipButtonUsable(button, player)) {
+            if (
+                labels.some(label => labelPatterns.some(pattern => pattern.test(label))) &&
+                isSkipButtonUsable(button, player)
+            ) {
                 return button;
             }
         }
@@ -392,28 +569,62 @@
         return null;
     }
 
+    function tryInstantSeekToEnd(media) {
+        if (!media || settings.adMode !== "instant") return false;
+
+        const duration = Number(media.duration);
+        const currentTime = Number(media.currentTime);
+        if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime)) {
+            return false;
+        }
+
+        const targetTime = Math.max(0, duration - ADS_CONFIG.seekEndOffset);
+        // Do not continuously fight an in-flight seek. If YouTube rejects the
+        // seek, retry at a controlled interval while the ad remains active.
+        if (media.seeking || currentTime >= targetTime - 0.2) return false;
+
+        const now = Date.now();
+        if (now - lastAdSeekAt < ADS_CONFIG.seekRetryInterval) return false;
+        lastAdSeekAt = now;
+
+        try {
+            media.currentTime = targetTime;
+            adsLog(`Instant mode requested seek to ${targetTime.toFixed(2)}s`);
+            return true;
+        } catch (error) {
+            adsLog(`Instant seek was rejected: ${String(error)}`);
+            return false;
+        }
+    }
+
     function performAdSkip() {
         const player = adPlayer;
-        if (!player || !player.isConnected || !hasYouTubeAdState(player)) return false;
+        if (
+            settings.adMode === "none" ||
+            !player || !player.isConnected ||
+            !hasYouTubeAdState(player)
+        ) return false;
+
+        const media = adVideo && adVideo.isConnected
+            ? adVideo
+            : player.querySelector("video");
+
+        if (settings.adMode === "instant") {
+            tryInstantSeekToEnd(media);
+        }
 
         const skipButton = findSkipButton(player);
         if (!skipButton) return false;
 
         const now = Date.now();
-        if (now - lastSkipAttemptAt < 120) return false;
-        if (
-            skipButton === lastClickedSkipButton &&
-            now - lastSkipAttemptAt < ADS_CONFIG.clickCooldown
-        ) {
-            return false;
-        }
-
+        // Retry the same visible Skip control until the ad state disappears.
+        // The short interval is bounded by the single ad retry loop below.
+        if (now - lastSkipAttemptAt < ADS_CONFIG.clickInterval) return false;
         lastSkipAttemptAt = now;
-        lastClickedSkipButton = skipButton;
 
         try {
             skipButton.click();
-            adsLog("Clicked an available YouTube ad-skip control");
+            adsLog(`Clicked Skip (${settings.adMode} mode)`);
             return true;
         } catch (error) {
             adsLog(`Skip-button click failed: ${String(error)}`);
@@ -424,26 +635,38 @@
     function checkYouTubeAds() {
         if (!isPageEnabled() || !isYouTube || !isTopFrame) return;
 
+        if (settings.adMode === "none") {
+            if (adWasActive || adVideo) restoreAfterAd();
+            stopAdRetryLoop();
+            removeAdsStyles();
+            return;
+        }
+
         if (!adPlayer || !adPlayer.isConnected) {
+            // A detached player must not leave the old ad video muted or keep
+            // a retry interval alive while no player exists.
+            if (adWasActive || adVideo) restoreAfterAd();
+            adPlayer = null;
             bindYouTubePlayer();
-            if (!adPlayer || !adPlayer.isConnected) return;
+            if (!adPlayer || !adPlayer.isConnected) {
+                stopAdRetryLoop();
+                return;
+            }
         }
 
         const active = hasYouTubeAdState(adPlayer);
-
         if (active) {
             if (!adWasActive) {
                 adWasActive = true;
-                adsLog("YouTube ad detected");
+                lastSkipAttemptAt = 0;
+                lastAdSeekAt = 0;
+                adsLog("YouTube in-stream ad detected");
             }
 
-            // YouTube may replace the <video> node between ad segments or
-            // when transitioning back to the requested video.
+            // Re-read the video every time: YouTube can replace the media node
+            // between ad segments while keeping the player root alive.
             const currentVideo = adPlayer.querySelector("video");
             trackAdVideo(currentVideo);
-
-            // Keep checking while an ad is active because the skip control may
-            // appear several seconds after the ad begins.
             performAdSkip();
             startAdRetryLoop();
         } else if (adWasActive) {
@@ -452,17 +675,16 @@
     }
 
     function scheduleAdCheck() {
-        if (adCheckTimer !== null || !isPageEnabled()) return;
-        adCheckTimer = setTimeout(() => {
-            adCheckTimer = null;
-            checkYouTubeAds();
-        }, ADS_CONFIG.observerDebounce);
+        // Do not debounce ad-state changes: the first mute must happen as soon
+        // as the player class mutation is delivered by MutationObserver.
+        if (!isPageEnabled()) return;
+        checkYouTubeAds();
     }
 
     function bindYouTubePlayer() {
         if (!isPageEnabled() || !isYouTube || !isTopFrame) return false;
 
-        const nextPlayer = document.querySelector(ADS_QUERY.player);
+        const nextPlayer = findYouTubePlayer();
         if (!nextPlayer) return false;
 
         if (nextPlayer !== adPlayer) {
@@ -472,7 +694,6 @@
             }
 
             if (adWasActive || adVideo) restoreAfterAd();
-
             adPlayer = nextPlayer;
             adPlayerObserver = new MutationObserver(scheduleAdCheck);
             adPlayerObserver.observe(adPlayer, {
@@ -495,7 +716,7 @@
         playerBindTimer = setTimeout(() => {
             playerBindTimer = null;
             bindYouTubePlayer();
-        }, 50);
+        }, 0);
     }
 
     function installPlayerDiscoveryObserver() {
@@ -508,9 +729,6 @@
 
         playerDiscoveryObserver = new MutationObserver(() => {
             if (!isPageEnabled()) return;
-
-            // The observer is intentionally cheap: it only searches for a new
-            // player after the previously bound player has actually detached.
             if (!adPlayer || !adPlayer.isConnected) schedulePlayerBind();
         });
 
@@ -529,6 +747,19 @@
         }
     }
 
+    // Player media events are a second, low-latency safety net if YouTube
+    // changes the video node or updates mute/rate during an active ad.
+    function handleAdMediaEvent(event) {
+        if (!isPageEnabled() || !isYouTube || !isTopFrame || !isMedia(event.target)) return;
+        const player = adPlayer && adPlayer.isConnected ? adPlayer : findYouTubePlayer();
+        if (!player || !player.contains(event.target) || !hasYouTubeAdState(player)) return;
+        checkYouTubeAds();
+    }
+
+    ["play", "playing", "loadedmetadata", "volumechange", "ratechange"].forEach(type => {
+        document.addEventListener(type, handleAdMediaEvent, true);
+    });
+
     let injectLanguageStyle = null;
 
     if (isYouTube && isTopFrame) {
@@ -539,6 +770,9 @@
         };
 
         if (document.readyState === "loading") {
+            // Install discovery as early as document-start permits. Keep the
+            // DOMContentLoaded retry for cases where documentElement is not ready.
+            installPlayerDiscoveryObserver();
             document.addEventListener("DOMContentLoaded", () => {
                 injectLanguageStyle();
                 installPlayerDiscoveryObserver();
@@ -566,10 +800,6 @@
             if (panel) panel.style.display = "none";
 
             stopAdRetryLoop();
-            if (adCheckTimer !== null) {
-                clearTimeout(adCheckTimer);
-                adCheckTimer = null;
-            }
             if (playerBindTimer !== null) {
                 clearTimeout(playerBindTimer);
                 playerBindTimer = null;
@@ -1088,29 +1318,20 @@
         "ratechange",
         (e) => {
             const target = e.target;
+            if (!isPageEnabled() || !isMedia(target)) return;
 
-            if (
-                !isPageEnabled() ||
-                !isSpeedForced ||
-                !isMedia(target) ||
-                target !== activeMedia ||
-                isYouTubeAdActive()
-            ) {
+            if (isYouTubeAdActive() && target.tagName === "VIDEO") {
+                // If YouTube or another handler changes rate during an ad,
+                // immediately bring it back to normal speed.
+                if (adVideo === target) enforceAdVideoState(target);
                 return;
             }
 
-            const expectedSpeed =
-                Math.max(
-                    0.1,
-                    Math.min(5, customSpeed)
-                );
+            if (!isSpeedForced || target !== activeMedia) return;
 
-            if (
-                target.playbackRate !==
-                expectedSpeed
-            ) {
-                target.playbackRate =
-                    expectedSpeed;
+            const expectedSpeed = Math.max(0.1, Math.min(5, customSpeed));
+            if (Math.abs(target.playbackRate - expectedSpeed) > 0.01) {
+                target.playbackRate = expectedSpeed;
             }
         },
         true
@@ -1202,6 +1423,15 @@
             <option value="hd1080">1080p</option>
             <option value="hd1440">1440p</option>
             <option value="hd2160">4K</option>
+        </select>
+
+        <select
+            id="vcp-ad-mode"
+            title="Chế độ bỏ qua quảng cáo YouTube"
+        >
+            <option value="none">Ads: None</option>
+            <option value="normal" title="20x when supported; falls back to the browser's 16x ceiling when needed">Ads: Normal 20x*</option>
+            <option value="instant">Ads: Instant</option>
         </select>
 
         <label
@@ -1327,7 +1557,8 @@
             cursor: not-allowed;
         }
 
-        #vcp-quality {
+        #vcp-quality,
+        #vcp-ad-mode {
             background: #333;
             color: #fff;
             border: 1px solid #555;
@@ -1411,6 +1642,7 @@
         btn3x: panel.querySelector("#vcp-btn-3x"),
         spdInput: panel.querySelector("#vcp-spd-input"),
         quality: panel.querySelector("#vcp-quality"),
+        adMode: panel.querySelector("#vcp-ad-mode"),
         boost: panel.querySelector("#vcp-boost"),
         loop: panel.querySelector("#vcp-loop"),
         force: panel.querySelector("#vcp-force")
@@ -1418,6 +1650,7 @@
 
     if (ui && !isYouTube) {
         ui.quality.style.display = "none";
+        ui.adMode.style.display = "none";
     }
 
     function saveSettings() {
@@ -1426,7 +1659,8 @@
             loop: settings.loop,
             forceResume: settings.forceResume,
             q: settings.q,
-            enableBoost: settings.enableBoost
+            enableBoost: settings.enableBoost,
+            adMode: settings.adMode
         };
 
         GM_setValue(
@@ -1478,6 +1712,25 @@
         saveSettings();
     }
 
+    function applyAdModeChange() {
+        if (!isYouTube || !isTopFrame || !isPageEnabled()) return;
+
+        if (settings.adMode === "none") {
+            // None means no ad mute, rate change, seek, Skip click, or ad CSS.
+            stopAdRetryLoop();
+            if (adVideo) restoreAdVideo(adVideo);
+            adWasActive = false;
+            lastSkipAttemptAt = 0;
+            lastAdSeekAt = 0;
+            removeAdsStyles();
+            return;
+        }
+
+        injectAdsStyles();
+        lastAdSeekAt = 0;
+        checkYouTubeAds();
+    }
+
     if (ui) {
         ui.slider.oninput = e => handleVolChange(e.target.value);
         ui.vol.onchange = e => handleVolChange(e.target.value);
@@ -1523,6 +1776,14 @@
             saveSettings();
         };
 
+        ui.adMode.onchange = e => {
+            settings.adMode = VALID_AD_MODES.has(e.target.value)
+                ? e.target.value
+                : DEFAULT_SETTINGS.adMode;
+            applyAdModeChange();
+            saveSettings();
+        };
+
         // SPEED
         ui.btn3x.onclick = () => {
             isSpeedForced = !isSpeedForced;
@@ -1546,7 +1807,11 @@
 
                 if (activeMedia) {
                     if (!originalPlaybackRates.has(activeMedia)) {
-                        originalPlaybackRates.set(activeMedia, activeMedia.playbackRate || 1);
+                        const adState = adMediaStates.get(activeMedia);
+                        const baselineRate = adState && Number.isFinite(adState.playbackRate)
+                            ? adState.playbackRate
+                            : (activeMedia.playbackRate || 1);
+                        originalPlaybackRates.set(activeMedia, baselineRate);
                     }
                     applyMediaSettings(activeMedia, false);
                 }
@@ -1643,7 +1908,10 @@
     );
 
     updateVolUI(settings.vol);
-    if (ui) ui.quality.value = settings.q;
+    if (ui) {
+        ui.quality.value = settings.q;
+        ui.adMode.value = settings.adMode;
+    }
 
     // =========================================================
     // LOW CPU FALLBACK
@@ -1700,11 +1968,14 @@
         ui.loop.checked = settings.loop;
         ui.force.checked = settings.forceResume;
         ui.quality.value = settings.q;
+        ui.adMode.value = settings.adMode;
     }
 
     function applySyncedSettings(value) {
         if (!isPageEnabled() || !value || typeof value !== "object") return;
+        const previousAdMode = settings.adMode;
         Object.assign(settings, normalizeSettings(value));
+        if (previousAdMode !== settings.adMode) applyAdModeChange();
         refreshPanelFromSettings();
         updateForceResumeTimer();
         if (activeMedia) applyMediaSettings(activeMedia, true);
@@ -1725,10 +1996,6 @@
 
     window.addEventListener("pagehide", () => {
         stopAdRetryLoop();
-        if (adCheckTimer !== null) {
-            clearTimeout(adCheckTimer);
-            adCheckTimer = null;
-        }
         if (playerBindTimer !== null) {
             clearTimeout(playerBindTimer);
             playerBindTimer = null;
