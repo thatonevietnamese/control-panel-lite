@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube & Media Control Suite (Unified)
 // @namespace    https://github.com/thatonevietnamese/media-control-suite
-// @version      1.4.0
+// @version      1.4.2
 // @description  Unified media controls for volume, playback speed, looping and force resume.
 // @updateURL    https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
 // @downloadURL  https://raw.githubusercontent.com/thatonevietnamese/control-panel-lite/refs/heads/main/Controlpanelmaxlite.js
